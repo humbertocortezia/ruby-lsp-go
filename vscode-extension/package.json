@@ -1,11 +1,12 @@
 {
   "name": "vscode-ruby-lsp-go",
-  "displayName": "Ruby LSP Go",
+  "displayName": "Ruby Go LSP",
   "description": "High-performance Ruby Language Server Protocol implementation in Go",
   "version": "1.2.0",
-  "publisher": "RubyLSPGo",
+  "publisher": "RubyGoLSP",
   "icon": "images/logo.png",
   "license": "MIT",
+  "author": "Humberto Cortezia",
   "repository": {
     "type": "git",
     "url": "https://github.com/humbertocortezia/ruby-lsp-go"
