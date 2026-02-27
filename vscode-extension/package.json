@@ -1,0 +1,157 @@
+{
+  "name": "vscode-ruby-lsp-go",
+  "displayName": "Ruby LSP Go",
+  "description": "High-performance Ruby Language Server Protocol implementation in Go",
+  "version": "1.2.0",
+  "publisher": "RubyLSPGo",
+  "icon": "images/logo.png",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/humbertocortezia/ruby-lsp-go"
+  },
+  "engines": {
+    "vscode": "^1.74.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters",
+    "Formatters",
+    "Other"
+  ],
+  "keywords": [
+    "ruby",
+    "rails",
+    "lsp",
+    "language-server",
+    "formatter",
+    "intellisense",
+    "go"
+  ],
+  "activationEvents": [
+    "onLanguage:ruby",
+    "onLanguage:erb",
+    "onLanguage:rbs"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "configuration": {
+      "type": "object",
+      "title": "Ruby LSP Go",
+      "properties": {
+        "rubyLspGo.path": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the Ruby LSP Go executable. If not set, the extension will look for it in the PATH."
+        },
+        "rubyLspGo.useBundler": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether to run commands with bundle exec"
+        },
+        "rubyLspGo.formatter": {
+          "type": "string",
+          "enum": ["auto", "none", "rubocop", "syntax_tree"],
+          "default": "auto",
+          "description": "Code formatter to use"
+        },
+        "rubyLspGo.linters": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["standard", "rubocop", "reek", "bridgetown"]
+          },
+          "default": [],
+          "description": "List of linters to use"
+        },
+        "rubyLspGo.enabledFeatures": {
+          "type": "object",
+          "properties": {
+            "codeActions": {
+              "type": "boolean",
+              "default": true
+            },
+            "diagnostics": {
+              "type": "boolean",
+              "default": true
+            },
+            "documentHighlights": {
+              "type": "boolean",
+              "default": true
+            },
+            "documentSymbols": {
+              "type": "boolean",
+              "default": true
+            },
+            "foldingRanges": {
+              "type": "boolean",
+              "default": true
+            },
+            "formatting": {
+              "type": "boolean",
+              "default": true
+            },
+            "hover": {
+              "type": "boolean",
+              "default": true
+            },
+            "inlayHint": {
+              "type": "boolean",
+              "default": false
+            },
+            "onTypeFormatting": {
+              "type": "boolean",
+              "default": true
+            },
+            "selectionRanges": {
+              "type": "boolean",
+              "default": true
+            },
+            "semanticHighlighting": {
+              "type": "boolean",
+              "default": true
+            }
+          },
+          "default": {},
+          "description": "Configure which LSP features are enabled"
+        }
+      }
+    },
+    "languages": [
+      {
+        "id": "ruby",
+        "aliases": ["Ruby", "ruby"],
+        "extensions": [".rb", ".ru", ".rake", ".gemspec", ".podspec", ".thor", ".jbuilder", ".rabl", ".Rakefile", ".Capfile", ".Guardfile", ".Podfile", ".Vagrantfile", ".Appfile", ".Cheffile", ".Hobofile", ".Berksfile", ".Berksfile.lock", ".Thorfile", ".Puppetfile"]
+      },
+      {
+        "id": "erb",
+        "aliases": ["ERB", "erb"],
+        "extensions": [".erb", ".rhtml"]
+      },
+      {
+        "id": "rbs",
+        "aliases": ["RBS", "rbs"],
+        "extensions": [".rbs"]
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile",
+    "test": "node ./out/test/runTest.js"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.74.0",
+    "@types/mocha": "^9.1.1",
+    "@types/node": "16.x",
+    "typescript": "^4.9.4",
+    "vscode-test": "^1.6.1",
+    "@vscode/test-electron": "^2.2.2"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^8.1.0",
+    "which": "^3.0.0"
+  }
+}
+

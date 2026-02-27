@@ -1,0 +1,27 @@
+# Binaries
+ruby-lsp-go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Object files
+*.o
+*.a
+*.obj
+
+# Test output
+*.test
+*.prof
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor directories and files
+.idea
+.vscode/
+*.swp
+*.swo
+*~

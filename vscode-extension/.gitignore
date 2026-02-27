@@ -1,0 +1,14 @@
+# Dependencies
+node_modules/
+.npm/
+
+# Build and output
+out/
+dist/
+*.vsix
+bin/ruby-lsp-go
+
+# OS / Editor
+.DS_Store
+.vscode/
+.idea/
