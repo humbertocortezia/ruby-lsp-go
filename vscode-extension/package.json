@@ -1,9 +1,9 @@
 {
   "name": "vscode-ruby-lsp-go",
-  "displayName": "Ruby Go LSP",
+  "displayName": "Ruby LSP Go",
   "description": "High-performance Ruby Language Server Protocol implementation in Go",
-  "version": "1.2.0",
-  "publisher": "RubyGoLSP",
+  "version": "1.2.1",
+  "publisher": "RubyLSPGo",
   "icon": "images/logo.png",
   "license": "MIT",
   "author": "Humberto Cortezia",
@@ -122,17 +122,73 @@
       {
         "id": "ruby",
         "aliases": ["Ruby", "ruby"],
-        "extensions": [".rb", ".ru", ".rake", ".gemspec", ".podspec", ".thor", ".jbuilder", ".rabl", ".Rakefile", ".Capfile", ".Guardfile", ".Podfile", ".Vagrantfile", ".Appfile", ".Cheffile", ".Hobofile", ".Berksfile", ".Berksfile.lock", ".Thorfile", ".Puppetfile"]
+        "extensions": [
+          ".rb",
+          ".ru",
+          ".rake",
+          ".gemspec",
+          ".podspec",
+          ".thor",
+          ".jbuilder",
+          ".rabl",
+          ".Rakefile",
+          ".Capfile",
+          ".Guardfile",
+          ".Podfile",
+          ".Vagrantfile",
+          ".Appfile",
+          ".Cheffile",
+          ".Hobofile",
+          ".Berksfile",
+          ".Berksfile.lock",
+          ".Thorfile",
+          ".Puppetfile"
+        ],
+        "configuration": "./languages/ruby.json"
       },
       {
         "id": "erb",
         "aliases": ["ERB", "erb"],
-        "extensions": [".erb", ".rhtml"]
+        "extensions": [
+          ".erb",
+          ".rhtml"
+        ],
+        "configuration": "./languages/erb.json"
       },
       {
         "id": "rbs",
         "aliases": ["RBS", "rbs"],
-        "extensions": [".rbs"]
+        "extensions": [
+          ".rbs"
+        ],
+        "configuration": "./languages/rbs.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "ruby",
+        "scopeName": "source.ruby",
+        "path": "./grammars/ruby.cson.json"
+      },
+      {
+        "language": "erb",
+        "scopeName": "text.html.erb",
+        "path": "./grammars/erb.cson.json",
+        "embeddedLanguages": {
+          "source.css": "css",
+          "source.js": "javascript",
+          "source.ruby": "ruby"
+        }
+      },
+      {
+        "path": "./grammars/rbs.injection.json",
+        "scopeName": "rbs-comment.injection",
+        "injectTo": [
+          "source.ruby"
+        ],
+        "embeddedLanguages": {
+          "meta.type.signature.rbs": "rbs"
+        }
       }
     ]
   },
