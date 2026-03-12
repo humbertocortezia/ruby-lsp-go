@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/url"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -34,12 +35,10 @@ func (s *Server) HandleInitialize(params interface{}) interface{} {
 			"workspaceSymbolProvider":    true,
 			"documentFormattingProvider": true,
 			"documentHighlightProvider":  true,
+			"foldingRangeProvider":       true,
 			"codeActionProvider": map[string]interface{}{
 				"codeActionKinds": []string{"quickfix", "refactor"},
 			},
-			"foldingRangeProvider": true,
-			"renameProvider":      true,
-			"referencesProvider":  true,
 		},
 		"serverInfo": map[string]string{
 			"name":    "Ruby LSP Go",
@@ -399,33 +398,54 @@ func (s *Server) HandleDocumentSymbol(params interface{}) interface{} {
 	}
 
 	filePath := uriToFilePath(uri)
-	idx, hasIndexer := s.Indexer.(*indexer.Index)
+	storeInst := s.Store.(*store.Store)
+	doc, exists := storeInst.Get(uri)
+	if !exists {
+		return []interface{}{}
+	}
 
+	// Try to get symbols from indexer first
+	idx, hasIndexer := s.Indexer.(*indexer.Index)
 	var entries []indexer.SymbolEntry
 	if hasIndexer {
 		entries = idx.GetFileSymbols(filePath)
 	}
 
-	// If indexer doesn't have it, parse from store
+	// Parse from document if indexer doesn't have symbols
 	if len(entries) == 0 {
-		storeInst := s.Store.(*store.Store)
-		if doc, exists := storeInst.Get(uri); exists {
-			rubyDoc := documents.New(doc.URI, doc.Source, doc.Version, doc.LanguageID)
-			ast, err := rubyDoc.Parse()
-			if err != nil {
-				return []interface{}{}
-			}
-
-			var symbols []interface{}
-			extractSymbolsFromAST(ast, &symbols)
-			return symbols
+		rubyDoc := documents.New(doc.URI, doc.Source, doc.Version, doc.LanguageID)
+		ast, err := rubyDoc.Parse()
+		if err != nil {
+			return []interface{}{}
 		}
-		return []interface{}{}
+
+		var symbols []interface{}
+		extractSymbolsFromAST(ast, &symbols, nil)
+		return symbols
 	}
 
+	// Build hierarchical symbols from indexer entries
+	symbols := buildHierarchicalSymbols(entries)
+
+	return symbols
+}
+
+// buildHierarchicalSymbols builds LSP DocumentSymbol with proper hierarchy (children)
+func buildHierarchicalSymbols(entries []indexer.SymbolEntry) []interface{} {
+	// Group symbols by their parent
+	type SymbolWithParent struct {
+		entry indexer.SymbolEntry
+		level int
+	}
+
+	// Build flat list with parent info
 	var symbols []interface{}
+
+	// First, add top-level symbols (classes, modules)
+	// Then add methods/constants nested inside
 	for _, entry := range entries {
 		kind := indexer.SymbolKindToLSP(entry.Type)
+
 		symbol := map[string]interface{}{
 			"name": entry.Name,
 			"kind": kind,
@@ -459,6 +479,208 @@ func (s *Server) HandleDocumentSymbol(params interface{}) interface{} {
 	}
 
 	return symbols
+}
+
+// HandleFoldingRange handles textDocument/foldingRange request
+func (s *Server) HandleFoldingRange(params interface{}) interface{} {
+	s.Logger.(*log.Logger).Println("Processing folding range request")
+
+	uri := extractTextDocumentURI(params)
+	if uri == "" {
+		return []interface{}{}
+	}
+
+	storeInst := s.Store.(*store.Store)
+	doc, exists := storeInst.Get(uri)
+	if !exists {
+		return []interface{}{}
+	}
+
+	return computeFoldingRanges(doc.Source)
+}
+
+// foldingOpener tracks an opening keyword for folding range matching
+type foldingOpener struct {
+	line   int
+	indent int
+	kind   string // "region", "comment", "imports"
+}
+
+// Ruby block-opening keyword patterns for folding
+var (
+	foldClassPattern = regexp.MustCompile(`^\s*(class|module)\s+`)
+	foldDefPattern   = regexp.MustCompile(`^\s*def\s+`)
+	foldBlockPattern = regexp.MustCompile(`\bdo\s*(\|[^|]*\|)?\s*$`)
+	foldIfPattern    = regexp.MustCompile(`^\s*(if|unless|case|while|until|for|begin)\b`)
+	foldEndPattern   = regexp.MustCompile(`^\s*end\b`)
+	foldCommentLine  = regexp.MustCompile(`^\s*#`)
+	foldRequireLine  = regexp.MustCompile(`^\s*(require|require_relative)\s+`)
+)
+
+// computeFoldingRanges analyzes Ruby source code and returns LSP FoldingRange objects
+func computeFoldingRanges(source string) []interface{} {
+	lines := strings.Split(source, "\n")
+	var ranges []interface{}
+
+	// Stack-based matching for keyword...end blocks
+	var stack []foldingOpener
+
+	// Track consecutive comment lines
+	commentStart := -1
+	commentEnd := -1
+
+	// Track consecutive require lines
+	requireStart := -1
+	requireEnd := -1
+
+	// Track multi-line brackets
+	var bracketStack []foldingOpener
+
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		indent := countFoldingIndent(line)
+
+		// --- Consecutive comments ---
+		if foldCommentLine.MatchString(line) && !foldRequireLine.MatchString(line) {
+			if commentStart == -1 {
+				commentStart = i
+			}
+			commentEnd = i
+		} else {
+			if commentStart != -1 && commentEnd > commentStart {
+				ranges = append(ranges, makeFoldingRange(commentStart, commentEnd, "comment"))
+			}
+			commentStart = -1
+			commentEnd = -1
+		}
+
+		// --- Consecutive requires ---
+		if foldRequireLine.MatchString(line) {
+			if requireStart == -1 {
+				requireStart = i
+			}
+			requireEnd = i
+		} else {
+			if requireStart != -1 && requireEnd > requireStart {
+				ranges = append(ranges, makeFoldingRange(requireStart, requireEnd, "imports"))
+			}
+			requireStart = -1
+			requireEnd = -1
+		}
+
+		// Skip empty lines and pure comments for block matching
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+
+		// --- Multi-line brackets: [ and { ---
+		for _, ch := range line {
+			switch ch {
+			case '[', '{':
+				bracketStack = append(bracketStack, foldingOpener{line: i, indent: indent, kind: "region"})
+			case ']', '}':
+				if len(bracketStack) > 0 {
+					opener := bracketStack[len(bracketStack)-1]
+					bracketStack = bracketStack[:len(bracketStack)-1]
+					if i > opener.line {
+						ranges = append(ranges, makeFoldingRange(opener.line, i, "region"))
+					}
+				}
+			}
+		}
+
+		// --- end keyword: pop the stack ---
+		if foldEndPattern.MatchString(line) {
+			if len(stack) > 0 {
+				// Find the matching opener by indent level
+				for j := len(stack) - 1; j >= 0; j-- {
+					if stack[j].indent <= indent {
+						opener := stack[j]
+						stack = append(stack[:j], stack[j+1:]...)
+						if i > opener.line+1 {
+							// endLine = i-1 keeps the `end` keyword visible when collapsed
+							ranges = append(ranges, makeFoldingRange(opener.line, i-1, opener.kind))
+						}
+						break
+					}
+				}
+			}
+			continue
+		}
+
+		// --- Block openers ---
+		if foldClassPattern.MatchString(line) {
+			stack = append(stack, foldingOpener{line: i, indent: indent, kind: "region"})
+			continue
+		}
+		if foldDefPattern.MatchString(line) {
+			stack = append(stack, foldingOpener{line: i, indent: indent, kind: "region"})
+			continue
+		}
+		if foldBlockPattern.MatchString(line) {
+			stack = append(stack, foldingOpener{line: i, indent: indent, kind: "region"})
+			continue
+		}
+		if foldIfPattern.MatchString(line) {
+			// Avoid matching trailing if/unless (single-line modifiers)
+			if isStandaloneKeyword(trimmed) {
+				stack = append(stack, foldingOpener{line: i, indent: indent, kind: "region"})
+			}
+			continue
+		}
+	}
+
+	// Flush remaining comments
+	if commentStart != -1 && commentEnd > commentStart {
+		ranges = append(ranges, makeFoldingRange(commentStart, commentEnd, "comment"))
+	}
+
+	// Flush remaining requires
+	if requireStart != -1 && requireEnd > requireStart {
+		ranges = append(ranges, makeFoldingRange(requireStart, requireEnd, "imports"))
+	}
+
+	return ranges
+}
+
+// makeFoldingRange creates an LSP FoldingRange object (0-indexed lines)
+func makeFoldingRange(startLine, endLine int, kind string) interface{} {
+	result := map[string]interface{}{
+		"startLine":     startLine,
+		"endLine":       endLine,
+		"collapsedText": "...",
+	}
+	if kind != "" {
+		result["kind"] = kind
+	}
+	return result
+}
+
+// countFoldingIndent returns the number of leading spaces (tabs count as 2)
+func countFoldingIndent(line string) int {
+	count := 0
+	for _, ch := range line {
+		if ch == ' ' {
+			count++
+		} else if ch == '\t' {
+			count += 2
+		} else {
+			break
+		}
+	}
+	return count
+}
+
+// isStandaloneKeyword checks if a keyword (if/unless/etc.) starts the statement
+// (not used as a trailing modifier like `return x if condition`)
+func isStandaloneKeyword(trimmed string) bool {
+	words := strings.Fields(trimmed)
+	if len(words) == 0 {
+		return false
+	}
+	keyword := words[0]
+	return keyword == "if" || keyword == "unless" || keyword == "case" ||
+		keyword == "while" || keyword == "until" || keyword == "for" || keyword == "begin"
 }
 
 // HandleWorkspaceSymbol handles workspace/symbol request (Ctrl+T)
@@ -528,6 +750,16 @@ func (s *Server) HandleFormatting(params interface{}) interface{} {
 	return []interface{}{}
 }
 
+// HandleDocumentHighlight handles textDocument/documentHighlight request
+func (s *Server) HandleDocumentHighlight(params interface{}) interface{} {
+	return []interface{}{}
+}
+
+// HandleCodeAction handles textDocument/codeAction request
+func (s *Server) HandleCodeAction(params interface{}) interface{} {
+	return []interface{}{}
+}
+
 // SendResponse sends a response back to the client
 func (s *Server) SendResponse(id interface{}, result interface{}) {
 	response := map[string]interface{}{
@@ -542,7 +774,34 @@ func (s *Server) SendResponse(id interface{}, result interface{}) {
 		return
 	}
 
-	fmt.Printf("Content-Length: %d\r\n\r\n%s", len(jsonBytes), jsonBytes)
+	// Write response in a goroutine to avoid blocking
+	// This prevents deadlock when client disconnects
+	go func() {
+		fmt.Printf("Content-Length: %d\r\n\r\n%s", len(jsonBytes), jsonBytes)
+	}()
+}
+
+// SendError sends a JSON-RPC error response back to the client
+func (s *Server) SendError(id interface{}, code int, message string) {
+	response := map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      id,
+		"error": map[string]interface{}{
+			"code":    code,
+			"message": message,
+		},
+	}
+
+	jsonBytes, err := json.Marshal(response)
+	if err != nil {
+		s.Logger.(*log.Logger).Printf("Error marshaling error response: %v", err)
+		return
+	}
+
+	// Write error response in a goroutine to avoid blocking
+	go func() {
+		fmt.Printf("Content-Length: %d\r\n\r\n%s", len(jsonBytes), jsonBytes)
+	}()
 }
 
 // DispatchOutgoingMessages dispatches messages from the outgoing queue
@@ -574,6 +833,15 @@ func (s *Server) HandleCancelRequest(params interface{}) {
 			s.CancelledRequests[id] = true
 		}
 	}
+}
+
+// IsRequestCancelled checks if a request has been cancelled
+func (s *Server) IsRequestCancelled(id int) bool {
+	if s.CancelledRequests[id] {
+		delete(s.CancelledRequests, id)
+		return true
+	}
+	return false
 }
 
 // --- Helper functions ---
@@ -657,7 +925,7 @@ func capitalize(s string) string {
 }
 
 // extractSymbolsFromAST extracts symbols from the AST for document symbols (fallback)
-func extractSymbolsFromAST(node *documents.Node, symbols *[]interface{}) {
+func extractSymbolsFromAST(node *documents.Node, symbols *[]interface{}, parent interface{}) {
 	if node.Type == "class" || node.Type == "method" || node.Type == "module" {
 		kind := getSymbolKind(node.Type)
 		symbol := map[string]interface{}{
@@ -676,7 +944,7 @@ func extractSymbolsFromAST(node *documents.Node, symbols *[]interface{}) {
 	}
 
 	for _, child := range node.Children {
-		extractSymbolsFromAST(child, symbols)
+		extractSymbolsFromAST(child, symbols, node.Name)
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -17,9 +18,24 @@ import (
 	"github.com/humberto/ruby-lsp-go/store"
 )
 
+// getMessageID converts a message ID to int for cancellation checking
+func getMessageID(id interface{}) int {
+	switch v := id.(type) {
+	case float64:
+		return int(v)
+	case string:
+		if intVal, err := strconv.Atoi(v); err == nil {
+			return intVal
+		}
+	case int:
+		return v
+	}
+	return -1
+}
+
 func main() {
 	logger := log.New(os.Stderr, "[RubyLSP-Go] ", log.LstdFlags)
-	
+
 	// Create the server
 	globalState := &lsp.GlobalState{
 		WorkspaceURI:       fmt.Sprintf("file://%s", os.Getenv("PWD")),
@@ -30,9 +46,9 @@ func main() {
 		EnabledFeatures:    make(map[string]bool),
 		Mutex:              sync.Mutex{},
 	}
-	
+
 	storeInstance := store.New(globalState)
-	
+
 	server := &lsp.Server{
 		GlobalState:       globalState,
 		Store:             storeInstance,
@@ -47,10 +63,10 @@ func main() {
 
 	// Read initialization message if provided
 	reader := bufio.NewReader(os.Stdin)
-	
+
 	// Handle LSP communication over stdin/stdout
 	scanner := NewMessageScanner(reader)
-	
+
 	for {
 		msg, err := scanner.Scan()
 		if err != nil {
@@ -105,23 +121,77 @@ func main() {
 				}
 			}
 		case "textDocument/completion":
+			if server.IsRequestCancelled(getMessageID(msg.ID)) {
+				break
+			}
 			result := server.HandleCompletion(msg.Params)
-			server.SendResponse(msg.ID, result)
+			if !server.IsRequestCancelled(getMessageID(msg.ID)) {
+				server.SendResponse(msg.ID, result)
+			}
 		case "textDocument/hover":
+			if server.IsRequestCancelled(getMessageID(msg.ID)) {
+				break
+			}
 			result := server.HandleHover(msg.Params)
-			server.SendResponse(msg.ID, result)
+			if !server.IsRequestCancelled(getMessageID(msg.ID)) {
+				server.SendResponse(msg.ID, result)
+			}
 		case "textDocument/definition":
+			if server.IsRequestCancelled(getMessageID(msg.ID)) {
+				break
+			}
 			result := server.HandleDefinition(msg.Params)
-			server.SendResponse(msg.ID, result)
+			if !server.IsRequestCancelled(getMessageID(msg.ID)) {
+				server.SendResponse(msg.ID, result)
+			}
 		case "textDocument/documentSymbol":
+			if server.IsRequestCancelled(getMessageID(msg.ID)) {
+				break
+			}
 			result := server.HandleDocumentSymbol(msg.Params)
-			server.SendResponse(msg.ID, result)
+			if !server.IsRequestCancelled(getMessageID(msg.ID)) {
+				server.SendResponse(msg.ID, result)
+			}
 		case "textDocument/formatting":
+			if server.IsRequestCancelled(getMessageID(msg.ID)) {
+				break
+			}
 			result := server.HandleFormatting(msg.Params)
-			server.SendResponse(msg.ID, result)
+			if !server.IsRequestCancelled(getMessageID(msg.ID)) {
+				server.SendResponse(msg.ID, result)
+			}
+		case "textDocument/foldingRange":
+			if server.IsRequestCancelled(getMessageID(msg.ID)) {
+				break
+			}
+			result := server.HandleFoldingRange(msg.Params)
+			if !server.IsRequestCancelled(getMessageID(msg.ID)) {
+				server.SendResponse(msg.ID, result)
+			}
+		case "textDocument/documentHighlight":
+			if server.IsRequestCancelled(getMessageID(msg.ID)) {
+				break
+			}
+			result := server.HandleDocumentHighlight(msg.Params)
+			if !server.IsRequestCancelled(getMessageID(msg.ID)) {
+				server.SendResponse(msg.ID, result)
+			}
+		case "textDocument/codeAction":
+			if server.IsRequestCancelled(getMessageID(msg.ID)) {
+				break
+			}
+			result := server.HandleCodeAction(msg.Params)
+			if !server.IsRequestCancelled(getMessageID(msg.ID)) {
+				server.SendResponse(msg.ID, result)
+			}
 		case "workspace/symbol":
+			if server.IsRequestCancelled(getMessageID(msg.ID)) {
+				break
+			}
 			result := server.HandleWorkspaceSymbol(msg.Params)
-			server.SendResponse(msg.ID, result)
+			if !server.IsRequestCancelled(getMessageID(msg.ID)) {
+				server.SendResponse(msg.ID, result)
+			}
 		case "shutdown":
 			server.Shutdown()
 			server.SendResponse(msg.ID, nil)
@@ -130,8 +200,11 @@ func main() {
 		case "$/cancelRequest":
 			server.HandleCancelRequest(msg.Params)
 		default:
-			// Queue other messages for background processing
-			server.IncomingQueue <- msg
+			logger.Printf("Unhandled method: %s", msg.Method)
+			// Requests (with ID) expect a response; reply with MethodNotFound
+			if msg.ID != nil {
+				server.SendError(msg.ID, -32601, "Method not supported: "+msg.Method)
+			}
 		}
 	}
 }
@@ -147,7 +220,7 @@ func NewMessageScanner(reader *bufio.Reader) *MessageScanner {
 
 func (ms *MessageScanner) Scan() (lsp.Message, error) {
 	var msg lsp.Message
-	
+
 	// Read Content-Length header
 	header, err := ms.reader.ReadString('\n')
 	if err != nil {
@@ -185,11 +258,11 @@ func (ms *MessageScanner) Scan() (lsp.Message, error) {
 			msg.ID = v
 		}
 	}
-	
+
 	if method, ok := req["method"]; ok {
 		msg.Method = method.(string)
 	}
-	
+
 	if params, ok := req["params"]; ok {
 		msg.Params = params
 	}
