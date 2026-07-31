@@ -19,7 +19,7 @@ import (
 
 func main() {
 	logger := log.New(os.Stderr, "[RubyLSP-Go] ", log.LstdFlags)
-	
+
 	// Create the server
 	globalState := &lsp.GlobalState{
 		WorkspaceURI:       fmt.Sprintf("file://%s", os.Getenv("PWD")),
@@ -30,9 +30,9 @@ func main() {
 		EnabledFeatures:    make(map[string]bool),
 		Mutex:              sync.Mutex{},
 	}
-	
+
 	storeInstance := store.New(globalState)
-	
+
 	server := &lsp.Server{
 		GlobalState:       globalState,
 		Store:             storeInstance,
@@ -47,10 +47,10 @@ func main() {
 
 	// Read initialization message if provided
 	reader := bufio.NewReader(os.Stdin)
-	
+
 	// Handle LSP communication over stdin/stdout
 	scanner := NewMessageScanner(reader)
-	
+
 	for {
 		msg, err := scanner.Scan()
 		if err != nil {
@@ -116,6 +116,12 @@ func main() {
 		case "textDocument/documentSymbol":
 			result := server.HandleDocumentSymbol(msg.Params)
 			server.SendResponse(msg.ID, result)
+		case "textDocument/foldingRange":
+			result := server.HandleFoldingRange(msg.Params)
+			server.SendResponse(msg.ID, result)
+		case "textDocument/onTypeFormatting":
+			result := server.HandleOnTypeFormatting(msg.Params)
+			server.SendResponse(msg.ID, result)
 		case "textDocument/formatting":
 			result := server.HandleFormatting(msg.Params)
 			server.SendResponse(msg.ID, result)
@@ -147,7 +153,7 @@ func NewMessageScanner(reader *bufio.Reader) *MessageScanner {
 
 func (ms *MessageScanner) Scan() (lsp.Message, error) {
 	var msg lsp.Message
-	
+
 	// Read Content-Length header
 	header, err := ms.reader.ReadString('\n')
 	if err != nil {
@@ -185,11 +191,11 @@ func (ms *MessageScanner) Scan() (lsp.Message, error) {
 			msg.ID = v
 		}
 	}
-	
+
 	if method, ok := req["method"]; ok {
 		msg.Method = method.(string)
 	}
-	
+
 	if params, ok := req["params"]; ok {
 		msg.Params = params
 	}
@@ -212,12 +218,9 @@ func SendJSON(w io.Writer, v interface{}) error {
 
 // uriToPath converts a file:// URI to a local filesystem path
 func uriToPath(uri string) string {
-	if strings.HasPrefix(uri, "file://") {
-		parsed, err := url.Parse(uri)
-		if err == nil {
-			return parsed.Path
-		}
-		return strings.TrimPrefix(uri, "file://")
+	parsed, err := url.Parse(uri)
+	if err == nil && parsed.Scheme == "file" {
+		return parsed.Path
 	}
-	return uri
+	return strings.TrimPrefix(uri, "file://")
 }

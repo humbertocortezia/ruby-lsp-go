@@ -29,7 +29,7 @@ func New(gs interface{}) *Store {
 func (s *Store) Get(uri string) (*Document, bool) {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
-	
+
 	doc, exists := s.documents[uri]
 	return doc, exists
 }
@@ -38,14 +38,14 @@ func (s *Store) Get(uri string) (*Document, bool) {
 func (s *Store) Set(uri string, source string, version int, languageID string) *Document {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
-	
+
 	doc := &Document{
-		URI:       uri,
-		Version:   version,
-		Source:    source,
+		URI:        uri,
+		Version:    version,
+		Source:     source,
 		LanguageID: languageID,
 	}
-	
+
 	s.documents[uri] = doc
 	return doc
 }
@@ -54,7 +54,7 @@ func (s *Store) Set(uri string, source string, version int, languageID string) *
 func (s *Store) Delete(uri string) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
-	
+
 	delete(s.documents, uri)
 }
 
@@ -62,7 +62,7 @@ func (s *Store) Delete(uri string) {
 func (s *Store) Clear() {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
-	
+
 	s.documents = make(map[string]*Document)
 }
 
@@ -70,7 +70,7 @@ func (s *Store) Clear() {
 func (s *Store) Each(fn func(string, *Document)) {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
-	
+
 	for uri, doc := range s.documents {
 		fn(uri, doc)
 	}
@@ -80,11 +80,10 @@ func (s *Store) Each(fn func(string, *Document)) {
 func (s *Store) Keys() []string {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
-	
+
 	keys := make([]string, 0, len(s.documents))
 	for uri := range s.documents {
 		keys = append(keys, uri)
 	}
 	return keys
 }
-

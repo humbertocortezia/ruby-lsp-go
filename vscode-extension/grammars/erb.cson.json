@@ -54,6 +54,21 @@
   },
   "patterns": [
     {
+      "match": "(</?)([A-Za-z_:][\\w:.-]*)",
+      "captures": {
+        "1": {
+          "name": "punctuation.definition.tag.begin.html"
+        },
+        "2": {
+          "name": "entity.name.tag.html"
+        }
+      }
+    },
+    {
+      "match": "(/?>)",
+      "name": "punctuation.definition.tag.end.html"
+    },
+    {
       "include": "text.html.basic"
     }
   ],

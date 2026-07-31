@@ -56,7 +56,7 @@ export async function activate(context: ExtensionContext) {
       { scheme: "file", language: "rbs" },
     ],
     synchronize: {
-      fileEvents: workspace.createFileSystemWatcher("**/*.rb"),
+      fileEvents: workspace.createFileSystemWatcher("**/*.{rb,erb,rhtml}"),
     },
     outputChannel: outputChannel,
     initializationOptions: {
@@ -153,4 +153,3 @@ function getEnabledFeatures(): Record<string, boolean> {
 
   return { ...defaults, ...enabledFeatures };
 }
-

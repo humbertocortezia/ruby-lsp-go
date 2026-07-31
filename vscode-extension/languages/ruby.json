@@ -1,5 +1,25 @@
 {
   "indentationRules": {
+    "increaseIndentPattern": "^\\s*(class|module|def|if|unless|case|begin|while|until|for)\\b|\\bdo\\b(\\s*\\|.*\\|)?\\s*$",
     "decreaseIndentPattern": "^\\s*([}\\]]([,)]?\\s*(#|$)|\\.[a-zA-Z_]\\w*\\b)|(end|rescue|ensure|else|elsif)\\b)|((in|when)\\s)"
-  }
+  },
+  "onEnterRules": [
+    {
+      "beforeText": "^\\s*(class|module|def|if|unless|case|begin|while|until|for)\\b.*$",
+      "afterText": "^\\s*end\\b.*$",
+      "action": { "indent": "indentOutdent" }
+    },
+    {
+      "beforeText": "^\\s*(class|module|def|if|unless|case|begin|while|until|for)\\b.*$",
+      "action": { "indent": "indent" }
+    },
+    {
+      "beforeText": "^\\s*.*\\bdo\\b\\s*(\\|.*\\|)?\\s*$",
+      "action": { "indent": "indent" }
+    },
+    {
+      "beforeText": "^\\s*(else|elsif|rescue|ensure)\\b.*$",
+      "action": { "indent": "outdentIndent" }
+    }
+  ]
 }
