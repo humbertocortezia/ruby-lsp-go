@@ -1,0 +1,12 @@
+.git/**
+.github/**
+.vscode/**
+.DS_Store
+*.vsix
+
+# Development-only files. bin/ is intentionally not ignored because it
+# contains the platform-specific Ruby LSP Go executables.
+src/**
+tsconfig.json
+build.sh
+package-lock.json
