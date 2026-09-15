@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"unicode"
+	"unicode/utf8"
 )
 
 // SymbolType represents the kind of Ruby symbol
@@ -24,6 +25,7 @@ const (
 	SymbolScope
 	SymbolAssociation
 	SymbolAttrAccessor
+	SymbolLocalVariable
 )
 
 // SymbolEntry represents a single indexed symbol
@@ -53,17 +55,19 @@ type Index struct {
 
 // Regex patterns for Ruby constructs
 var (
-	classPattern          = regexp.MustCompile(`^\s*class\s+([A-Z][\w:]*)\s*(?:<\s*([A-Z][\w:]*))?`)
-	modulePattern         = regexp.MustCompile(`^\s*module\s+([A-Z][\w:]*)`)
-	methodPattern         = regexp.MustCompile(`^\s*def\s+(self\.)?(\w+[!?=]?)`)
-	constantPattern       = regexp.MustCompile(`^\s*([A-Z][A-Z0-9_]*)\s*=`)
-	scopePattern          = regexp.MustCompile(`^\s*scope\s+:(\w+)`)
-	associationPattern    = regexp.MustCompile(`^\s*(belongs_to|has_many|has_one|has_and_belongs_to_many)\s+:(\w+)`)
-	attrPattern           = regexp.MustCompile(`^\s*(attr_accessor|attr_reader|attr_writer)\s+(.+)`)
-	symbolExtractPattern  = regexp.MustCompile(`:(\w+)`)
-	endPattern            = regexp.MustCompile(`^\s*end\b`)
-	privatePattern        = regexp.MustCompile(`^\s*(private|protected|public)\s*$`)
-	includePattern        = regexp.MustCompile(`^\s*(include|extend|prepend)\s+([A-Z][\w:]*)`)
+	classPattern           = regexp.MustCompile(`^\s*class\s+([A-Z][\w:]*)\s*(?:<\s*([A-Z][\w:]*))?`)
+	modulePattern          = regexp.MustCompile(`^\s*module\s+([A-Z][\w:]*)`)
+	methodPattern          = regexp.MustCompile(`^\s*def\s+(self\.)?(\w+[!?=]?)`)
+	constantPattern        = regexp.MustCompile(`^\s*([A-Z][A-Z0-9_]*)\s*=`)
+	scopePattern           = regexp.MustCompile(`^\s*scope\s+:(\w+)`)
+	associationPattern     = regexp.MustCompile(`^\s*(belongs_to|has_many|has_one|has_and_belongs_to_many)\s+:(\w+)`)
+	attrPattern            = regexp.MustCompile(`^\s*(attr_accessor|attr_reader|attr_writer)\s+(.+)`)
+	symbolExtractPattern   = regexp.MustCompile(`:(\w+)`)
+	endPattern             = regexp.MustCompile(`^\s*end\b`)
+	privatePattern         = regexp.MustCompile(`^\s*(private|protected|public)\s*$`)
+	includePattern         = regexp.MustCompile(`^\s*(include|extend|prepend)\s+([A-Z][\w:]*)`)
+	localAssignmentPattern = regexp.MustCompile(`\b([a-z_][a-zA-Z0-9_]*)\s*=`)
+	methodCallPattern      = regexp.MustCompile(`([A-Z][a-zA-Z0-9_:]*)\s*\.\s*([a-z_][a-zA-Z0-9_]*[!?=]?)`)
 )
 
 // Directories to skip during indexing
@@ -383,6 +387,120 @@ func (idx *Index) Lookup(name string) []SymbolEntry {
 	return nil
 }
 
+// LookupMethod finds a method defined on a specific receiver class.
+// Looking up by both method name and parent avoids resolving calls such as
+// MyClass.new to an unrelated method with the same name.
+func (idx *Index) LookupMethod(receiver string, method string) []SymbolEntry {
+	entries := idx.Lookup(method)
+	results := make([]SymbolEntry, 0, len(entries))
+
+	for _, entry := range entries {
+		if entry.Parent == receiver && (entry.Type == SymbolMethod || entry.Type == SymbolSingletonMethod) {
+			results = append(results, entry)
+		}
+	}
+
+	return deduplicateEntries(results)
+}
+
+// FindLocalVariableDefinition resolves a local variable inside the method that
+// contains the requested line. Local variables must be resolved before global
+// symbols because Ruby permits a local variable and a method to share a name.
+func FindLocalVariableDefinition(source string, line int, name string) (SymbolEntry, bool) {
+	if name == "" || !isLocalVariableName(name) {
+		return SymbolEntry{}, false
+	}
+
+	lines := strings.Split(source, "\n")
+	if line < 0 || line >= len(lines) {
+		return SymbolEntry{}, false
+	}
+
+	methodStart := -1
+	methodIndent := 0
+	for i := 0; i <= line; i++ {
+		currentLine := lines[i]
+		if matches := methodPattern.FindStringSubmatch(currentLine); matches != nil {
+			methodStart = i
+			methodIndent = countIndent(currentLine)
+			continue
+		}
+
+		if methodStart >= 0 && endPattern.MatchString(currentLine) && countIndent(currentLine) <= methodIndent {
+			methodStart = -1
+		}
+	}
+
+	if methodStart < 0 {
+		return SymbolEntry{}, false
+	}
+
+	// Parameters are local variables and are defined at the method declaration.
+	for _, parameter := range methodParameters(lines[methodStart]) {
+		if parameter.name == name {
+			return SymbolEntry{
+				Name:               name,
+				FullyQualifiedName: name,
+				Type:               SymbolLocalVariable,
+				Line:               methodStart + 1,
+				Character:          parameter.character,
+				Parent:             methodName(lines[methodStart]),
+			}, true
+		}
+	}
+
+	// Ruby locals are scoped to the whole method, so search the complete method
+	// body instead of only lines before the cursor.
+	for i := methodStart + 1; i < len(lines); i++ {
+		currentLine := lines[i]
+		if i > methodStart && endPattern.MatchString(currentLine) && countIndent(currentLine) <= methodIndent {
+			break
+		}
+
+		matches := localAssignmentPattern.FindAllStringSubmatchIndex(currentLine, -1)
+		for _, match := range matches {
+			if currentLine[match[2]:match[3]] != name {
+				continue
+			}
+
+			return SymbolEntry{
+				Name:               name,
+				FullyQualifiedName: name,
+				Type:               SymbolLocalVariable,
+				Line:               i + 1,
+				Character:          runeCount(currentLine[:match[2]]),
+				Parent:             methodName(lines[methodStart]),
+			}, true
+		}
+	}
+
+	return SymbolEntry{}, false
+}
+
+// GetReceiverAtPosition returns the constant receiver of a method call when
+// the cursor is on that call's method name (for example MyClass in
+// MyClass.new). It intentionally only handles constant receivers; resolving a
+// variable receiver requires type inference that this lightweight index does
+// not provide yet.
+func GetReceiverAtPosition(source string, line int, character int) (string, bool) {
+	lines := strings.Split(source, "\n")
+	if line < 0 || line >= len(lines) || character < 0 {
+		return "", false
+	}
+
+	lineText := lines[line]
+	characterByte := byteOffset(lineText, character)
+	for _, match := range methodCallPattern.FindAllStringSubmatchIndex(lineText, -1) {
+		methodStart := match[4]
+		methodEnd := match[5]
+		if characterByte >= methodStart && characterByte <= methodEnd {
+			return lineText[match[2]:match[3]], true
+		}
+	}
+
+	return "", false
+}
+
 // PrefixSearch finds symbols whose name starts with the given prefix
 func (idx *Index) PrefixSearch(prefix string) []SymbolEntry {
 	idx.mutex.RLock()
@@ -578,21 +696,23 @@ func GetWordAtPosition(source string, line int, character int) string {
 func SymbolKindToLSP(t SymbolType) int {
 	switch t {
 	case SymbolClass:
-		return 5  // Class
+		return 5 // Class
 	case SymbolModule:
-		return 2  // Module
+		return 2 // Module
 	case SymbolMethod, SymbolSingletonMethod:
-		return 6  // Method
+		return 6 // Method
 	case SymbolConstant:
 		return 14 // Constant
 	case SymbolScope:
-		return 6  // Method (scopes are callable)
+		return 6 // Method (scopes are callable)
 	case SymbolAssociation:
-		return 7  // Property
+		return 7 // Property
 	case SymbolAttrAccessor:
-		return 7  // Property
+		return 7 // Property
+	case SymbolLocalVariable:
+		return 13 // Variable
 	default:
-		return 1  // File
+		return 1 // File
 	}
 }
 
@@ -600,21 +720,23 @@ func SymbolKindToLSP(t SymbolType) int {
 func CompletionKindFromType(t SymbolType) int {
 	switch t {
 	case SymbolClass:
-		return 7  // Class
+		return 7 // Class
 	case SymbolModule:
-		return 9  // Module
+		return 9 // Module
 	case SymbolMethod, SymbolSingletonMethod:
-		return 2  // Method
+		return 2 // Method
 	case SymbolConstant:
 		return 21 // Constant
 	case SymbolScope:
-		return 2  // Method
+		return 2 // Method
 	case SymbolAssociation:
-		return 5  // Field
+		return 5 // Field
 	case SymbolAttrAccessor:
 		return 10 // Property
+	case SymbolLocalVariable:
+		return 6 // Variable
 	default:
-		return 1  // Text
+		return 1 // Text
 	}
 }
 
@@ -637,6 +759,8 @@ func SymbolTypeString(t SymbolType) string {
 		return "association"
 	case SymbolAttrAccessor:
 		return "attribute"
+	case SymbolLocalVariable:
+		return "local variable"
 	default:
 		return "symbol"
 	}
@@ -646,6 +770,78 @@ func SymbolTypeString(t SymbolType) string {
 
 func isWordChar(r rune) bool {
 	return unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' || r == ':' || r == '!' || r == '?' || r == '='
+}
+
+type parameterLocation struct {
+	name      string
+	character int
+}
+
+func methodName(line string) string {
+	matches := methodPattern.FindStringSubmatch(line)
+	if len(matches) < 3 {
+		return ""
+	}
+	return matches[2]
+}
+
+func methodParameters(line string) []parameterLocation {
+	matches := methodPattern.FindStringSubmatchIndex(line)
+	if len(matches) < 6 {
+		return nil
+	}
+
+	restStart := matches[5]
+	rest := strings.TrimSpace(line[restStart:])
+	if strings.HasPrefix(rest, "(") {
+		if closing := strings.LastIndex(rest, ")"); closing >= 0 {
+			rest = rest[1:closing]
+		} else {
+			rest = rest[1:]
+		}
+	}
+
+	parameterPattern := regexp.MustCompile(`(?:^|[,|])\s*(?:\*{0,2})\s*([a-z_][a-zA-Z0-9_]*)`)
+	locations := parameterPattern.FindAllStringSubmatchIndex(rest, -1)
+	parameters := make([]parameterLocation, 0, len(locations))
+	for _, location := range locations {
+		parameters = append(parameters, parameterLocation{
+			name:      rest[location[2]:location[3]],
+			character: runeCount(line[:restStart]) + runeCount(rest[:location[2]]),
+		})
+	}
+
+	return parameters
+}
+
+func isLocalVariableName(name string) bool {
+	if name == "" {
+		return false
+	}
+
+	first := rune(name[0])
+	return first == '_' || (first >= 'a' && first <= 'z')
+}
+
+func runeCount(value string) int {
+	return utf8.RuneCountInString(value)
+}
+
+func byteOffset(value string, character int) int {
+	if character <= 0 {
+		return 0
+	}
+
+	for byteIndex, runeIndex := 0, 0; byteIndex < len(value); {
+		_, size := utf8.DecodeRuneInString(value[byteIndex:])
+		if runeIndex == character {
+			return byteIndex
+		}
+		byteIndex += size
+		runeIndex++
+	}
+
+	return len(value)
 }
 
 func countIndent(line string) int {

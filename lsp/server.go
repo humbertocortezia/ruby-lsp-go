@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/url"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 
@@ -38,12 +39,12 @@ func (s *Server) HandleInitialize(params interface{}) interface{} {
 				"codeActionKinds": []string{"quickfix", "refactor"},
 			},
 			"foldingRangeProvider": true,
-			"renameProvider":      true,
-			"referencesProvider":  true,
+			"renameProvider":       true,
+			"referencesProvider":   true,
 		},
 		"serverInfo": map[string]string{
 			"name":    "Ruby LSP Go",
-			"version": "1.2.0",
+			"version": "1.2.4",
 		},
 		"formatter":     "none",
 		"degraded_mode": false,
@@ -185,22 +186,45 @@ func (s *Server) HandleDefinition(params interface{}) interface{} {
 	// Remove leading colons (e.g., :user → user, then capitalize)
 	cleanWord := strings.TrimPrefix(word, ":")
 
-	// Try direct lookup first
-	entries := idx.Lookup(cleanWord)
-
-	// If nothing found, try capitalized version (Rails association → Model)
-	if len(entries) == 0 && !isCapitalized(cleanWord) {
-		capitalized := capitalize(cleanWord)
-		entries = idx.Lookup(capitalized)
+	// Resolve local variables before global symbols. Ruby allows a local
+	// variable and a method to share a name, but the local variable wins inside
+	// its method scope.
+	entries := []indexer.SymbolEntry{}
+	if local, ok := indexer.FindLocalVariableDefinition(doc.Source, pos.Line, cleanWord); ok {
+		entries = append(entries, local)
 	}
 
-	// Try Rails conventions
+	// Resolve an explicit constant receiver before the global lookup. In Ruby,
+	// MyClass.new should navigate to MyClass#initialize, not Object#new.
+	hasReceiver := false
 	if len(entries) == 0 {
-		lookupWord := cleanWord
-		if !isCapitalized(lookupWord) {
-			lookupWord = capitalize(lookupWord)
+		if receiver, ok := indexer.GetReceiverAtPosition(doc.Source, pos.Line, pos.Character); ok {
+			hasReceiver = true
+			methodName := cleanWord
+			if methodName == "new" {
+				methodName = "initialize"
+			}
+			entries = idx.LookupMethod(receiver, methodName)
 		}
-		entries = idx.LookupByConvention(lookupWord)
+	}
+
+	// Try direct lookup and Rails conventions only when there is no more
+	// specific local-variable or receiver-based resolution available.
+	if len(entries) == 0 && !hasReceiver {
+		entries = idx.Lookup(cleanWord)
+
+		if len(entries) == 0 && !isCapitalized(cleanWord) {
+			capitalized := capitalize(cleanWord)
+			entries = idx.Lookup(capitalized)
+		}
+
+		if len(entries) == 0 {
+			lookupWord := cleanWord
+			if !isCapitalized(lookupWord) {
+				lookupWord = capitalize(lookupWord)
+			}
+			entries = idx.LookupByConvention(lookupWord)
+		}
 	}
 
 	// Filter to only class/module definitions for Ctrl+Click (most common use case)
@@ -613,22 +637,30 @@ func extractTextDocumentURI(params interface{}) string {
 
 // uriToFilePath converts a file:// URI to a filesystem path
 func uriToFilePath(uri string) string {
-	if strings.HasPrefix(uri, "file://") {
-		parsed, err := url.Parse(uri)
-		if err == nil {
-			return parsed.Path
-		}
-		return strings.TrimPrefix(uri, "file://")
+	parsed, err := url.Parse(uri)
+	if err != nil || parsed.Scheme != "file" {
+		return uri
 	}
-	return uri
+
+	filePath := parsed.Path
+	if parsed.Host != "" && parsed.Host != "localhost" {
+		filePath = "//" + parsed.Host + filePath
+	}
+	if runtime.GOOS == "windows" && len(filePath) >= 3 && filePath[0] == '/' && filePath[2] == ':' {
+		filePath = filePath[1:]
+	}
+
+	return filepath.FromSlash(filePath)
 }
 
 // pathToURI converts a filesystem path to a file:// URI
 func pathToURI(path string) string {
-	if strings.HasPrefix(path, "/") {
-		return "file://" + path
+	filePath := filepath.ToSlash(path)
+	if runtime.GOOS == "windows" && len(filePath) >= 2 && filePath[1] == ':' && !strings.HasPrefix(filePath, "/") {
+		filePath = "/" + filePath
 	}
-	return "file:///" + path
+
+	return (&url.URL{Scheme: "file", Path: filePath}).String()
 }
 
 // isCapitalized checks if a string starts with an uppercase letter

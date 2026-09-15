@@ -17,26 +17,31 @@ This extension provides advanced Ruby language support using a Go implementation
 
 ## Requirements
 
-- **Ruby LSP Go executable**: Install the Ruby LSP Go server binary
 - **Ruby Environment**: A working Ruby installation with Bundler
+
+Packaged extensions include the Ruby LSP Go server for macOS (Intel and Apple
+Silicon), Linux (x64 and arm64), and Windows (x64 and arm64). You do not need
+to install the executable separately when using a package produced by
+`build.sh`.
 
 ## Installation
 
-1. Install the Ruby LSP Go server binary:
+1. Build the extension from the repository:
    ```bash
-   # Build from the Go implementation
-   cd ruby-lsp-go
-   go build -o ruby-lsp-go main.go
-   # Make sure ruby-lsp-go is in your PATH
+   cd ruby-lsp-go/vscode-extension
+   ./build.sh
    ```
 
-2. Install this extension in VS Code
+   The script compiles and packages the server binaries inside the `.vsix`.
+
+2. Install the generated `.vsix` in VS Code or Cursor
 
 ## Configuration
 
 The following settings are available:
 
-- `rubyLspGo.path`: Path to the Ruby LSP Go executable
+- `rubyLspGo.path`: Optional path to a custom Ruby LSP Go executable. The
+  bundled platform-specific executable is used by default.
 - `rubyLspGo.useBundler`: Whether to run with bundle exec (default: true)
 - `rubyLspGo.formatter`: Code formatter to use (auto, none, rubocop, syntax_tree)
 - `rubyLspGo.linters`: Array of linters to use
@@ -74,4 +79,3 @@ The Go implementation provides:
 - Improved concurrent processing
 
 Compared to the Ruby implementation, this Go version delivers significantly better performance for large Ruby and Rails codebases.
-

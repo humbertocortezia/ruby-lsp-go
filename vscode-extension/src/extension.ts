@@ -1,6 +1,5 @@
 import * as path from "path";
 import * as fs from "fs";
-import * as cp from "child_process";
 import * as which from "which";
 import {
   ExtensionContext,
@@ -32,7 +31,7 @@ export async function activate(context: ExtensionContext) {
   const rubyLspGoPath = getRubyLspGoPath();
   if (!rubyLspGoPath) {
     window.showErrorMessage(
-      "Ruby LSP Go executable not found. Please install ruby-lsp-go and ensure it is in your PATH, or configure rubyLspGo.path in your settings."
+      "Ruby LSP Go executable not found for this platform. Rebuild/reinstall the extension, install ruby-lsp-go and add it to PATH, or configure rubyLspGo.path in your settings."
     );
     return;
   }
@@ -108,12 +107,20 @@ function getRubyLspGoPath(): string | undefined {
     outputChannel.appendLine(`Configured path not found: ${resolved}`);
   }
 
-  // 2. Bundled binary inside the extension's bin/ folder
+  // 2. Bundled binary for this platform inside the extension's bin/ folder
   const extensionDir = path.resolve(__dirname, "..");
-  const bundledPath = path.join(extensionDir, "bin", "ruby-lsp-go");
-  if (fs.existsSync(bundledPath)) {
-    outputChannel.appendLine(`Using bundled ruby-lsp-go: ${bundledPath}`);
-    return bundledPath;
+  const executableName = process.platform === "win32" ? "ruby-lsp-go.exe" : "ruby-lsp-go";
+  const bundledPaths = [
+    path.join(extensionDir, "bin", `${process.platform}-${process.arch}`, executableName),
+    // Keep compatibility with packages produced before platform-specific binaries.
+    path.join(extensionDir, "bin", executableName),
+  ];
+
+  for (const bundledPath of bundledPaths) {
+    if (isRunnableFile(bundledPath)) {
+      outputChannel.appendLine(`Using bundled ruby-lsp-go: ${bundledPath}`);
+      return bundledPath;
+    }
   }
 
   // 3. Fall back to system PATH
@@ -124,6 +131,24 @@ function getRubyLspGoPath(): string | undefined {
   } catch (error) {
     outputChannel.appendLine("Could not find ruby-lsp-go in PATH or bundled with the extension");
     return undefined;
+  }
+}
+
+function isRunnableFile(filePath: string): boolean {
+  try {
+    const stats = fs.statSync(filePath);
+    if (!stats.isFile()) {
+      return false;
+    }
+
+    // Windows does not use Unix executable permission bits.
+    if (process.platform !== "win32") {
+      fs.accessSync(filePath, fs.constants.X_OK);
+    }
+
+    return true;
+  } catch (_error) {
+    return false;
   }
 }
 
@@ -153,4 +178,3 @@ function getEnabledFeatures(): Record<string, boolean> {
 
   return { ...defaults, ...enabledFeatures };
 }
-
