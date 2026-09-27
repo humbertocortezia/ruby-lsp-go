@@ -4,61 +4,256 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"net/url"
-	"path/filepath"
-	"strconv"
-	"strings"
+	"sync"
 
 	"github.com/humberto/ruby-lsp-go/documents"
 	"github.com/humberto/ruby-lsp-go/indexer"
+	"github.com/humberto/ruby-lsp-go/lsp/handlers"
 	"github.com/humberto/ruby-lsp-go/store"
+	"github.com/humberto/ruby-lsp-go/workspace"
 )
 
-// HandleInitialize handles the LSP initialize request
-func (s *Server) HandleInitialize(params interface{}) interface{} {
-	s.Logger.(*log.Logger).Println("Processing initialize request")
+const workerCount = 4
 
-	capabilities := map[string]interface{}{
-		"capabilities": map[string]interface{}{
-			"textDocumentSync": map[string]interface{}{
-				"change":    2, // incremental
-				"openClose": true,
-				"save":      map[string]interface{}{"includeText": false},
-			},
-			"completionProvider": map[string]interface{}{
-				"triggerCharacters": []string{".", ":", "@"},
-			},
-			"hoverProvider":              true,
-			"definitionProvider":         true,
-			"documentSymbolProvider":     true,
-			"workspaceSymbolProvider":    true,
-			"documentFormattingProvider": true,
-			"documentHighlightProvider":  true,
-			"codeActionProvider": map[string]interface{}{
-				"codeActionKinds": []string{"quickfix", "refactor"},
-			},
-			"foldingRangeProvider": true,
-			"renameProvider":      true,
-			"referencesProvider":  true,
-		},
-		"serverInfo": map[string]string{
-			"name":    "Ruby LSP Go",
-			"version": "1.2.0",
-		},
-		"formatter":     "none",
-		"degraded_mode": false,
+// Message represents an LSP JSON-RPC message.
+type Message struct {
+	ID     interface{} `json:"id,omitempty"`
+	Method string      `json:"method,omitempty"`
+	Params interface{} `json:"params,omitempty"`
+}
+
+// Server is the LSP server with worker pool for request processing.
+type Server struct {
+	State             *workspace.State
+	Store             *store.Store
+	Index             *indexer.IndexStore
+	IncomingQueue     chan Message
+	OutgoingQueue     chan Message
+	CancelledRequests map[int]bool
+	cancelMutex       sync.RWMutex
+	Logger            *log.Logger
+	shutdown          bool
+	shutdownMutex     sync.Mutex
+}
+
+// HandlerContext returns the shared handler context.
+func (s *Server) HandlerContext() *handlers.Context {
+	return &handlers.Context{
+		State:  s.State,
+		Store:  s.Store,
+		Index:  s.Index,
+		Logger: s.Logger,
+	}
+}
+
+// StartWorkers launches the worker pool consuming IncomingQueue.
+func (s *Server) StartWorkers() {
+	for i := 0; i < workerCount; i++ {
+		go s.worker(i)
+	}
+}
+
+func (s *Server) worker(id int) {
+	s.Logger.Printf("Worker %d started", id)
+	for msg := range s.IncomingQueue {
+		if s.isCancelled(msg) {
+			s.Logger.Printf("Worker %d: request %v cancelled", id, msg.ID)
+			continue
+		}
+		s.processMessage(msg)
+	}
+	s.Logger.Printf("Worker %d stopped", id)
+}
+
+func (s *Server) isCancelled(msg Message) bool {
+	if msg.ID == nil {
+		return false
+	}
+	id, ok := msg.ID.(float64)
+	if !ok {
+		if intID, ok := msg.ID.(int); ok {
+			id = float64(intID)
+		} else {
+			return false
+		}
+	}
+	s.cancelMutex.RLock()
+	defer s.cancelMutex.RUnlock()
+	return s.CancelledRequests[int(id)]
+}
+
+// processMessage routes a message to the appropriate handler.
+func (s *Server) processMessage(msg Message) {
+	ctx := s.HandlerContext()
+
+	switch msg.Method {
+	case "textDocument/completion":
+		s.SendResponse(msg.ID, handlers.Completion(ctx, msg.Params))
+	case "textDocument/hover":
+		s.SendResponse(msg.ID, handlers.Hover(ctx, msg.Params))
+	case "textDocument/definition":
+		s.SendResponse(msg.ID, handlers.Definition(ctx, msg.Params))
+	case "textDocument/documentSymbol":
+		s.SendResponse(msg.ID, handlers.DocumentSymbol(ctx, msg.Params))
+	case "textDocument/formatting":
+		s.SendResponse(msg.ID, handlers.Formatting(ctx, msg.Params))
+	case "textDocument/rangeFormatting":
+		s.SendResponse(msg.ID, handlers.RangeFormatting(ctx, msg.Params))
+	case "textDocument/onTypeFormatting":
+		s.SendResponse(msg.ID, handlers.OnTypeFormatting(ctx, msg.Params))
+	case "textDocument/foldingRange":
+		s.SendResponse(msg.ID, handlers.FoldingRange(ctx, msg.Params))
+	case "textDocument/selectionRange":
+		s.SendResponse(msg.ID, handlers.SelectionRange(ctx, msg.Params))
+	case "textDocument/documentHighlight":
+		s.SendResponse(msg.ID, handlers.DocumentHighlight(ctx, msg.Params))
+	case "textDocument/signatureHelp":
+		s.SendResponse(msg.ID, handlers.SignatureHelp(ctx, msg.Params))
+	case "textDocument/codeAction":
+		s.SendResponse(msg.ID, handlers.CodeAction(ctx, msg.Params))
+	case "textDocument/codeAction/resolve":
+		s.SendResponse(msg.ID, handlers.CodeActionResolve(ctx, msg.Params))
+	case "textDocument/rename":
+		s.SendResponse(msg.ID, handlers.Rename(ctx, msg.Params))
+	case "textDocument/prepareRename":
+		s.SendResponse(msg.ID, handlers.PrepareRename(ctx, msg.Params))
+	case "textDocument/references":
+		s.SendResponse(msg.ID, handlers.References(ctx, msg.Params))
+	case "textDocument/semanticTokens/full":
+		s.SendResponse(msg.ID, handlers.SemanticTokensFull(ctx, msg.Params))
+	case "textDocument/semanticTokens/range":
+		s.SendResponse(msg.ID, handlers.SemanticTokensRange(ctx, msg.Params))
+	case "textDocument/inlayHint":
+		s.SendResponse(msg.ID, handlers.InlayHints(ctx, msg.Params))
+	case "textDocument/codeLens":
+		s.SendResponse(msg.ID, handlers.CodeLens(ctx, msg.Params))
+	case "codeLens/resolve":
+		s.SendResponse(msg.ID, handlers.CodeLensResolve(ctx, msg.Params))
+	case "textDocument/documentLink":
+		s.SendResponse(msg.ID, handlers.DocumentLink(ctx, msg.Params))
+	case "textDocument/diagnostic":
+		s.SendResponse(msg.ID, handlers.Diagnostics(ctx, msg.Params))
+	case "textDocument/prepareTypeHierarchy":
+		s.SendResponse(msg.ID, handlers.PrepareTypeHierarchy(ctx, msg.Params))
+	case "typeHierarchy/supertypes":
+		s.SendResponse(msg.ID, handlers.TypeHierarchySupertypes(ctx, msg.Params))
+	case "workspace/symbol":
+		s.SendResponse(msg.ID, handlers.WorkspaceSymbol(ctx, msg.Params))
+	default:
+		s.Logger.Printf("Unhandled method: %s", msg.Method)
+	}
+}
+
+// HandleInitialize handles the LSP initialize request.
+func (s *Server) HandleInitialize(params interface{}) interface{} {
+	s.Logger.Println("Processing initialize request")
+
+	if paramMap, ok := params.(map[string]interface{}); ok {
+		s.State.ApplyInitializationOptions(paramMap)
+
+		if rootURI, ok := paramMap["rootUri"].(string); ok {
+			s.State.WorkspaceURI = rootURI
+			s.State.WorkspacePath = uriToPath(rootURI)
+		} else if rootPath, ok := paramMap["rootPath"].(string); ok {
+			s.State.WorkspacePath = rootPath
+			s.State.WorkspaceURI = "file://" + rootPath
+		} else if folders, ok := paramMap["workspaceFolders"].([]interface{}); ok && len(folders) > 0 {
+			if folder, ok := folders[0].(map[string]interface{}); ok {
+				if folderURI, ok := folder["uri"].(string); ok {
+					s.State.WorkspaceURI = folderURI
+					s.State.WorkspacePath = uriToPath(folderURI)
+				}
+			}
+		}
 	}
 
-	return capabilities
+	if s.State.WorkspacePath != "" && s.Index == nil {
+		s.Index = indexer.NewIndexStore(s.State.WorkspacePath, s.Logger)
+		go s.Index.BuildIndex()
+	}
+
+	return map[string]interface{}{
+		"capabilities": buildCapabilities(),
+		"serverInfo": map[string]string{
+			"name":    "Ruby LSP Go",
+			"version": "2.0.0",
+		},
+	}
 }
 
-// HandleInitialized handles the initialized notification
+func buildCapabilities() map[string]interface{} {
+	return map[string]interface{}{
+		"textDocumentSync": map[string]interface{}{
+			"change":    2,
+			"openClose": true,
+			"save":      map[string]interface{}{"includeText": false},
+		},
+		"completionProvider": map[string]interface{}{
+			"triggerCharacters": []string{".", ":", "@", "#", "$"},
+		},
+		"hoverProvider":                    true,
+		"definitionProvider":               true,
+		"documentSymbolProvider":           true,
+		"workspaceSymbolProvider":          true,
+		"documentFormattingProvider":       true,
+		"documentRangeFormattingProvider":    true,
+		"documentOnTypeFormattingProvider": map[string]interface{}{
+			"firstTriggerCharacter": "\n",
+			"moreTriggerCharacter":  []string{"d"},
+		},
+		"documentHighlightProvider": true,
+		"codeActionProvider": map[string]interface{}{
+			"resolveProvider": true,
+			"codeActionKinds": []string{"quickfix", "refactor", "source.fixAll", "refactor.extract.variable", "refactor.rewrite"},
+		},
+		"foldingRangeProvider":   true,
+		"selectionRangeProvider": true,
+		"renameProvider": map[string]interface{}{
+			"prepareProvider": true,
+		},
+		"referencesProvider": true,
+		"signatureHelpProvider": map[string]interface{}{
+			"triggerCharacters": []string{"(", ","},
+		},
+		"semanticTokensProvider": map[string]interface{}{
+			"legend": map[string]interface{}{
+				"tokenTypes": []string{
+					"namespace", "type", "class", "enum", "interface", "struct",
+					"typeParameter", "parameter", "variable", "property", "enumMember",
+					"event", "function", "method", "macro", "keyword", "modifier",
+					"comment", "string", "number", "regexp", "operator", "decorator",
+				},
+				"tokenModifiers": []string{
+					"declaration", "definition", "readonly", "static", "deprecated",
+					"abstract", "async", "modification", "documentation", "defaultLibrary",
+				},
+			},
+			"full":  map[string]interface{}{"delta": false},
+			"range": true,
+		},
+		"inlayHintProvider": map[string]interface{}{
+			"resolveProvider": false,
+		},
+		"codeLensProvider": map[string]interface{}{
+			"resolveProvider": true,
+		},
+		"documentLinkProvider": map[string]interface{}{
+			"resolveProvider": false,
+		},
+		"diagnosticProvider": map[string]interface{}{
+			"interFileDependencies": false,
+			"workspaceDiagnostics":  false,
+		},
+		"typeHierarchyProvider": true,
+	}
+}
+
+// HandleInitialized handles initialized notification.
 func (s *Server) HandleInitialized() {
-	s.Logger.(*log.Logger).Println("Initialization complete")
-	s.Logger.(*log.Logger).Println("Performing initial indexing...")
+	s.Logger.Println("Initialization complete")
 }
 
-// HandleDidOpen handles textDocument/didOpen notification
+// HandleDidOpen handles textDocument/didOpen.
 func (s *Server) HandleDidOpen(params interface{}) {
 	if paramMap, ok := params.(map[string]interface{}); ok {
 		if textDoc, ok := paramMap["textDocument"].(map[string]interface{}); ok {
@@ -66,469 +261,76 @@ func (s *Server) HandleDidOpen(params interface{}) {
 			text, _ := textDoc["text"].(string)
 			version, _ := textDoc["version"].(float64)
 			languageID, _ := textDoc["languageId"].(string)
-
-			storeInst := s.Store.(*store.Store)
-			storeInst.Set(uri, text, int(version), languageID)
-
-			s.Logger.(*log.Logger).Printf("Opened document: %s", uri)
+			s.Store.SetDocument(uri, text, int(version), languageID)
+			s.Logger.Printf("Opened document: %s", uri)
 		}
 	}
 }
 
-// HandleDidClose handles textDocument/didClose notification
+// HandleDidClose handles textDocument/didClose.
 func (s *Server) HandleDidClose(params interface{}) {
 	if paramMap, ok := params.(map[string]interface{}); ok {
 		if textDoc, ok := paramMap["textDocument"].(map[string]interface{}); ok {
 			uri, _ := textDoc["uri"].(string)
-
-			storeInst := s.Store.(*store.Store)
-			storeInst.Delete(uri)
-
-			s.Logger.(*log.Logger).Printf("Closed document: %s", uri)
+			s.Store.DeleteDocument(uri)
+			s.Logger.Printf("Closed document: %s", uri)
 		}
 	}
 }
 
-// HandleDidChange handles textDocument/didChange notification
+// HandleDidChange handles textDocument/didChange.
 func (s *Server) HandleDidChange(params interface{}) {
 	if paramMap, ok := params.(map[string]interface{}); ok {
 		if textDoc, ok := paramMap["textDocument"].(map[string]interface{}); ok {
 			uri, _ := textDoc["uri"].(string)
+			version, _ := textDoc["version"].(float64)
 
 			if changes, ok := paramMap["contentChanges"].([]interface{}); ok {
-				storeInst := s.Store.(*store.Store)
-
 				edits := make([]documents.TextEdit, 0, len(changes))
 				for _, change := range changes {
 					if changeMap, ok := change.(map[string]interface{}); ok {
-						var rangeObj *documents.Range
-
-						if rangeInterface, exists := changeMap["range"]; exists {
-							if rangeMap, isMap := rangeInterface.(map[string]interface{}); isMap {
-								var start, end documents.Position
-
-								if startMap, exists := rangeMap["start"].(map[string]interface{}); exists {
-									startLine, _ := startMap["line"].(float64)
-									startChar, _ := startMap["character"].(float64)
-									start = documents.Position{
-										Line:      int(startLine),
-										Character: int(startChar),
-									}
-								}
-
-								if endMap, exists := rangeMap["end"].(map[string]interface{}); exists {
-									endLine, _ := endMap["line"].(float64)
-									endChar, _ := endMap["character"].(float64)
-									end = documents.Position{
-										Line:      int(endLine),
-										Character: int(endChar),
-									}
-								}
-
-								rangeObj = &documents.Range{
-									Start: start,
-									End:   end,
-								}
-							}
-						}
-
-						newText, _ := changeMap["text"].(string)
-
-						edit := documents.TextEdit{
-							Range:   rangeObj,
-							NewText: newText,
-						}
-						edits = append(edits, edit)
+						edits = append(edits, parseTextEdit(changeMap))
 					}
 				}
-
-				if doc, exists := storeInst.Get(uri); exists {
-					rubyDoc := documents.New(doc.URI, doc.Source, doc.Version, doc.LanguageID)
-					rubyDoc.Update(edits)
-					storeInst.Set(uri, rubyDoc.Source, rubyDoc.Version, rubyDoc.LanguageID)
-				}
-
-				s.Logger.(*log.Logger).Printf("Changed document: %s", uri)
+				s.Store.ApplyEdits(uri, edits, int(version))
+				s.Logger.Printf("Changed document: %s", uri)
 			}
 		}
 	}
 }
 
-// HandleDefinition handles textDocument/definition request (Ctrl+Click)
-func (s *Server) HandleDefinition(params interface{}) interface{} {
-	s.Logger.(*log.Logger).Println("Processing definition request")
-
-	idx, hasIndexer := s.Indexer.(*indexer.Index)
-	if !hasIndexer || !idx.IsReady() {
-		return []interface{}{}
-	}
-
-	uri, pos := extractTextDocumentPosition(params)
-	if uri == "" {
-		return []interface{}{}
-	}
-
-	// Get the document source to find the word at cursor
-	storeInst := s.Store.(*store.Store)
-	doc, exists := storeInst.Get(uri)
-	if !exists {
-		return []interface{}{}
-	}
-
-	word := indexer.GetWordAtPosition(doc.Source, pos.Line, pos.Character)
-	if word == "" {
-		return []interface{}{}
-	}
-
-	s.Logger.(*log.Logger).Printf("Definition lookup for: %s", word)
-
-	// Remove leading colons (e.g., :user → user, then capitalize)
-	cleanWord := strings.TrimPrefix(word, ":")
-
-	// Try direct lookup first
-	entries := idx.Lookup(cleanWord)
-
-	// If nothing found, try capitalized version (Rails association → Model)
-	if len(entries) == 0 && !isCapitalized(cleanWord) {
-		capitalized := capitalize(cleanWord)
-		entries = idx.Lookup(capitalized)
-	}
-
-	// Try Rails conventions
-	if len(entries) == 0 {
-		lookupWord := cleanWord
-		if !isCapitalized(lookupWord) {
-			lookupWord = capitalize(lookupWord)
-		}
-		entries = idx.LookupByConvention(lookupWord)
-	}
-
-	// Filter to only class/module definitions for Ctrl+Click (most common use case)
-	var locations []interface{}
-	for _, entry := range entries {
-		// For class/module/constant lookups, prioritize non-method results
-		loc := map[string]interface{}{
-			"uri": pathToURI(entry.FilePath),
-			"range": map[string]interface{}{
-				"start": map[string]interface{}{
-					"line":      entry.Line - 1, // LSP is 0-indexed
-					"character": entry.Character,
-				},
-				"end": map[string]interface{}{
-					"line":      entry.Line - 1,
-					"character": entry.Character + len(entry.Name),
-				},
-			},
-		}
-		locations = append(locations, loc)
-	}
-
-	if len(locations) == 0 {
-		s.Logger.(*log.Logger).Printf("No definition found for: %s", word)
-	} else {
-		s.Logger.(*log.Logger).Printf("Found %d definition(s) for: %s", len(locations), word)
-	}
-
-	return locations
-}
-
-// HandleHover handles textDocument/hover request
-func (s *Server) HandleHover(params interface{}) interface{} {
-	s.Logger.(*log.Logger).Println("Processing hover request")
-
-	idx, hasIndexer := s.Indexer.(*indexer.Index)
-	if !hasIndexer || !idx.IsReady() {
-		return map[string]interface{}{"contents": ""}
-	}
-
-	uri, pos := extractTextDocumentPosition(params)
-	if uri == "" {
-		return map[string]interface{}{"contents": ""}
-	}
-
-	storeInst := s.Store.(*store.Store)
-	doc, exists := storeInst.Get(uri)
-	if !exists {
-		return map[string]interface{}{"contents": ""}
-	}
-
-	word := indexer.GetWordAtPosition(doc.Source, pos.Line, pos.Character)
-	if word == "" {
-		return map[string]interface{}{"contents": ""}
-	}
-
-	cleanWord := strings.TrimPrefix(word, ":")
-
-	// Try lookup
-	entries := idx.Lookup(cleanWord)
-	if len(entries) == 0 && !isCapitalized(cleanWord) {
-		entries = idx.Lookup(capitalize(cleanWord))
-	}
-	if len(entries) == 0 {
-		lookupWord := cleanWord
-		if !isCapitalized(lookupWord) {
-			lookupWord = capitalize(lookupWord)
-		}
-		entries = idx.LookupByConvention(lookupWord)
-	}
-
-	if len(entries) == 0 {
-		return map[string]interface{}{"contents": ""}
-	}
-
-	// Build hover markdown
-	var mdParts []string
-	for _, entry := range entries {
-		typeStr := indexer.SymbolTypeString(entry.Type)
-		relPath := entry.FilePath
-		if s.GlobalState.WorkspacePath != "" {
-			if rel, err := filepath.Rel(s.GlobalState.WorkspacePath, entry.FilePath); err == nil {
-				relPath = rel
-			}
-		}
-
-		header := fmt.Sprintf("```ruby\n%s %s\n```", typeStr, entry.FullyQualifiedName)
-		detail := fmt.Sprintf("**Defined in:** `%s:%d`", relPath, entry.Line)
-
-		extra := ""
-		if entry.Detail != "" {
-			switch entry.Type {
-			case indexer.SymbolClass:
-				extra = fmt.Sprintf("\n\n**Inherits from:** `%s`", entry.Detail)
-			case indexer.SymbolAssociation:
-				extra = fmt.Sprintf("\n\n**Association type:** `%s`", entry.Detail)
-			case indexer.SymbolAttrAccessor:
-				extra = fmt.Sprintf("\n\n**Accessor type:** `%s`", entry.Detail)
-			case indexer.SymbolScope:
-				extra = "\n\n**Type:** ActiveRecord scope"
-			}
-		}
-
-		mdParts = append(mdParts, header+"\n\n"+detail+extra)
-	}
-
-	return map[string]interface{}{
-		"contents": map[string]interface{}{
-			"kind":  "markdown",
-			"value": strings.Join(mdParts, "\n\n---\n\n"),
-		},
-	}
-}
-
-// HandleCompletion handles textDocument/completion request
-func (s *Server) HandleCompletion(params interface{}) interface{} {
-	s.Logger.(*log.Logger).Println("Processing completion request")
-
-	idx, hasIndexer := s.Indexer.(*indexer.Index)
-	if !hasIndexer || !idx.IsReady() {
-		return map[string]interface{}{
-			"isIncomplete": false,
-			"items":        []interface{}{},
-		}
-	}
-
-	uri, pos := extractTextDocumentPosition(params)
-	if uri == "" {
-		return map[string]interface{}{
-			"isIncomplete": false,
-			"items":        []interface{}{},
-		}
-	}
-
-	storeInst := s.Store.(*store.Store)
-	doc, exists := storeInst.Get(uri)
-	if !exists {
-		return map[string]interface{}{
-			"isIncomplete": false,
-			"items":        []interface{}{},
-		}
-	}
-
-	word := indexer.GetWordAtPosition(doc.Source, pos.Line, pos.Character)
-	if word == "" || len(word) < 2 {
-		return map[string]interface{}{
-			"isIncomplete": false,
-			"items":        []interface{}{},
-		}
-	}
-
-	entries := idx.PrefixSearch(word)
-
-	var items []interface{}
-	seen := make(map[string]bool)
-
-	for _, entry := range entries {
-		label := entry.Name
-		if seen[label] {
-			continue
-		}
-		seen[label] = true
-
-		kind := indexer.CompletionKindFromType(entry.Type)
-		detail := indexer.SymbolTypeString(entry.Type)
-		if entry.Parent != "" {
-			detail += " in " + entry.Parent
-		}
-
-		item := map[string]interface{}{
-			"label":  label,
-			"kind":   kind,
-			"detail": detail,
-		}
-		items = append(items, item)
-
-		// Cap at 50 results for performance
-		if len(items) >= 50 {
-			break
-		}
-	}
-
-	return map[string]interface{}{
-		"isIncomplete": len(items) >= 50,
-		"items":        items,
-	}
-}
-
-// HandleDocumentSymbol handles textDocument/documentSymbol request
-func (s *Server) HandleDocumentSymbol(params interface{}) interface{} {
-	s.Logger.(*log.Logger).Println("Processing document symbol request")
-
-	uri := extractTextDocumentURI(params)
-	if uri == "" {
-		return []interface{}{}
-	}
-
-	filePath := uriToFilePath(uri)
-	idx, hasIndexer := s.Indexer.(*indexer.Index)
-
-	var entries []indexer.SymbolEntry
-	if hasIndexer {
-		entries = idx.GetFileSymbols(filePath)
-	}
-
-	// If indexer doesn't have it, parse from store
-	if len(entries) == 0 {
-		storeInst := s.Store.(*store.Store)
-		if doc, exists := storeInst.Get(uri); exists {
-			rubyDoc := documents.New(doc.URI, doc.Source, doc.Version, doc.LanguageID)
-			ast, err := rubyDoc.Parse()
-			if err != nil {
-				return []interface{}{}
-			}
-
-			var symbols []interface{}
-			extractSymbolsFromAST(ast, &symbols)
-			return symbols
-		}
-		return []interface{}{}
-	}
-
-	var symbols []interface{}
-	for _, entry := range entries {
-		kind := indexer.SymbolKindToLSP(entry.Type)
-		symbol := map[string]interface{}{
-			"name": entry.Name,
-			"kind": kind,
-			"range": map[string]interface{}{
-				"start": map[string]interface{}{
-					"line":      entry.Line - 1,
-					"character": 0,
-				},
-				"end": map[string]interface{}{
-					"line":      entry.Line - 1,
-					"character": entry.Character + len(entry.Name),
-				},
-			},
-			"selectionRange": map[string]interface{}{
-				"start": map[string]interface{}{
-					"line":      entry.Line - 1,
-					"character": entry.Character,
-				},
-				"end": map[string]interface{}{
-					"line":      entry.Line - 1,
-					"character": entry.Character + len(entry.Name),
-				},
-			},
-		}
-
-		if entry.Detail != "" {
-			symbol["detail"] = entry.Detail
-		}
-
-		symbols = append(symbols, symbol)
-	}
-
-	return symbols
-}
-
-// HandleWorkspaceSymbol handles workspace/symbol request (Ctrl+T)
-func (s *Server) HandleWorkspaceSymbol(params interface{}) interface{} {
-	s.Logger.(*log.Logger).Println("Processing workspace symbol request")
-
-	idx, hasIndexer := s.Indexer.(*indexer.Index)
-	if !hasIndexer || !idx.IsReady() {
-		return []interface{}{}
-	}
-
-	query := ""
+// HandleDidSave handles textDocument/didSave.
+func (s *Server) HandleDidSave(params interface{}) {
 	if paramMap, ok := params.(map[string]interface{}); ok {
-		if q, ok := paramMap["query"].(string); ok {
-			query = q
-		}
-	}
-
-	if query == "" || len(query) < 2 {
-		return []interface{}{}
-	}
-
-	entries := idx.PrefixSearch(query)
-
-	var symbols []interface{}
-	for _, entry := range entries {
-		kind := indexer.SymbolKindToLSP(entry.Type)
-
-		relPath := entry.FilePath
-		if s.GlobalState.WorkspacePath != "" {
-			if rel, err := filepath.Rel(s.GlobalState.WorkspacePath, entry.FilePath); err == nil {
-				relPath = rel
+		if textDoc, ok := paramMap["textDocument"].(map[string]interface{}); ok {
+			uri, _ := textDoc["uri"].(string)
+			filePath := uriToPath(uri)
+			if s.Index != nil {
+				go s.Index.UpdateFile(filePath)
 			}
 		}
+	}
+}
 
-		symbol := map[string]interface{}{
-			"name": entry.FullyQualifiedName,
-			"kind": kind,
-			"location": map[string]interface{}{
-				"uri": pathToURI(entry.FilePath),
-				"range": map[string]interface{}{
-					"start": map[string]interface{}{
-						"line":      entry.Line - 1,
-						"character": entry.Character,
-					},
-					"end": map[string]interface{}{
-						"line":      entry.Line - 1,
-						"character": entry.Character + len(entry.Name),
-					},
-				},
-			},
-			"containerName": relPath,
-		}
-		symbols = append(symbols, symbol)
-
-		if len(symbols) >= 50 {
-			break
+// HandleCancelRequest handles $/cancelRequest.
+func (s *Server) HandleCancelRequest(params interface{}) {
+	if paramMap, ok := params.(map[string]interface{}); ok {
+		if idParam, exists := paramMap["id"]; exists {
+			var id int
+			switch v := idParam.(type) {
+			case float64:
+				id = int(v)
+			case int:
+				id = v
+			}
+			s.cancelMutex.Lock()
+			s.CancelledRequests[id] = true
+			s.cancelMutex.Unlock()
 		}
 	}
-
-	return symbols
 }
 
-// HandleFormatting handles textDocument/formatting request
-func (s *Server) HandleFormatting(params interface{}) interface{} {
-	s.Logger.(*log.Logger).Println("Processing formatting request")
-	return []interface{}{}
-}
-
-// SendResponse sends a response back to the client
+// SendResponse sends a JSON-RPC response to stdout.
 func (s *Server) SendResponse(id interface{}, result interface{}) {
 	response := map[string]interface{}{
 		"jsonrpc": "2.0",
@@ -538,158 +340,84 @@ func (s *Server) SendResponse(id interface{}, result interface{}) {
 
 	jsonBytes, err := json.Marshal(response)
 	if err != nil {
-		s.Logger.(*log.Logger).Printf("Error marshaling response: %v", err)
+		s.Logger.Printf("Error marshaling response: %v", err)
 		return
 	}
 
 	fmt.Printf("Content-Length: %d\r\n\r\n%s", len(jsonBytes), jsonBytes)
 }
 
-// DispatchOutgoingMessages dispatches messages from the outgoing queue
-func (s *Server) DispatchOutgoingMessages() {
-	s.Logger.(*log.Logger).Println("Starting message dispatcher...")
+// SendNotification sends a JSON-RPC notification to stdout.
+func (s *Server) SendNotification(method string, params interface{}) {
+	notification := map[string]interface{}{
+		"jsonrpc": "2.0",
+		"method":  method,
+		"params":  params,
+	}
+	jsonBytes, _ := json.Marshal(notification)
+	fmt.Printf("Content-Length: %d\r\n\r\n%s", len(jsonBytes), jsonBytes)
 }
 
-// Shutdown handles server shutdown
+// Shutdown handles server shutdown.
 func (s *Server) Shutdown() {
-	s.Logger.(*log.Logger).Println("Shutting down Ruby LSP Go server")
+	s.shutdownMutex.Lock()
+	defer s.shutdownMutex.Unlock()
+	if s.shutdown {
+		return
+	}
+	s.shutdown = true
 	close(s.IncomingQueue)
-	close(s.OutgoingQueue)
+	s.Logger.Println("Shutting down Ruby LSP Go server")
 }
 
-// HandleCancelRequest handles cancellation of requests
-func (s *Server) HandleCancelRequest(params interface{}) {
-	s.Logger.(*log.Logger).Println("Handling cancel request")
-	if paramMap, ok := params.(map[string]interface{}); ok {
-		if idParam, exists := paramMap["id"]; exists {
-			var id int
-			switch v := idParam.(type) {
-			case float64:
-				id = int(v)
-			case string:
-				if intVal, err := strconv.Atoi(v); err == nil {
-					id = intVal
-				}
-			}
-			s.CancelledRequests[id] = true
+// Enqueue adds a message to the worker queue.
+func (s *Server) Enqueue(msg Message) {
+	select {
+	case s.IncomingQueue <- msg:
+	default:
+		s.Logger.Printf("Incoming queue full, processing synchronously: %s", msg.Method)
+		s.processMessage(msg)
+	}
+}
+
+// DispatchOutgoingMessages processes outgoing notifications.
+func (s *Server) DispatchOutgoingMessages() {
+	for msg := range s.OutgoingQueue {
+		if msg.Method != "" {
+			s.SendNotification(msg.Method, msg.Params)
 		}
 	}
 }
 
-// --- Helper functions ---
-
-// extractTextDocumentPosition extracts URI and Position from LSP params
-func extractTextDocumentPosition(params interface{}) (string, documents.Position) {
-	var uri string
-	var pos documents.Position
-
-	if paramMap, ok := params.(map[string]interface{}); ok {
-		if textDoc, ok := paramMap["textDocument"].(map[string]interface{}); ok {
-			uri, _ = textDoc["uri"].(string)
-		}
-		if posParam, ok := paramMap["position"].(map[string]interface{}); ok {
-			if line, ok := posParam["line"].(float64); ok {
-				pos.Line = int(line)
-			}
-			if char, ok := posParam["character"].(float64); ok {
-				pos.Character = int(char)
-			}
+func parseTextEdit(changeMap map[string]interface{}) documents.TextEdit {
+	var edit documents.TextEdit
+	if rangeInterface, exists := changeMap["range"]; exists {
+		if rangeMap, isMap := rangeInterface.(map[string]interface{}); isMap {
+			edit.Range = parseRange(rangeMap)
 		}
 	}
-
-	return uri, pos
+	edit.NewText, _ = changeMap["text"].(string)
+	return edit
 }
 
-// extractTextDocumentURI extracts just the URI from params
-func extractTextDocumentURI(params interface{}) string {
-	if paramMap, ok := params.(map[string]interface{}); ok {
-		if textDoc, ok := paramMap["textDocument"].(map[string]interface{}); ok {
-			uri, _ := textDoc["uri"].(string)
-			return uri
-		}
+func parseRange(rangeMap map[string]interface{}) *documents.Range {
+	r := &documents.Range{}
+	if startMap, ok := rangeMap["start"].(map[string]interface{}); ok {
+		line, _ := startMap["line"].(float64)
+		char, _ := startMap["character"].(float64)
+		r.Start = documents.Position{Line: int(line), Character: int(char)}
 	}
-	return ""
+	if endMap, ok := rangeMap["end"].(map[string]interface{}); ok {
+		line, _ := endMap["line"].(float64)
+		char, _ := endMap["character"].(float64)
+		r.End = documents.Position{Line: int(line), Character: int(char)}
+	}
+	return r
 }
 
-// uriToFilePath converts a file:// URI to a filesystem path
-func uriToFilePath(uri string) string {
-	if strings.HasPrefix(uri, "file://") {
-		parsed, err := url.Parse(uri)
-		if err == nil {
-			return parsed.Path
-		}
-		return strings.TrimPrefix(uri, "file://")
+func uriToPath(uri string) string {
+	if len(uri) > 7 && uri[:7] == "file://" {
+		return uri[7:]
 	}
 	return uri
-}
-
-// pathToURI converts a filesystem path to a file:// URI
-func pathToURI(path string) string {
-	if strings.HasPrefix(path, "/") {
-		return "file://" + path
-	}
-	return "file:///" + path
-}
-
-// isCapitalized checks if a string starts with an uppercase letter
-func isCapitalized(s string) bool {
-	if len(s) == 0 {
-		return false
-	}
-	return s[0] >= 'A' && s[0] <= 'Z'
-}
-
-// capitalize converts the first character to uppercase (simple CamelCase for one word)
-func capitalize(s string) string {
-	if len(s) == 0 {
-		return s
-	}
-
-	// Handle snake_case → CamelCase
-	parts := strings.Split(s, "_")
-	var result strings.Builder
-	for _, part := range parts {
-		if len(part) > 0 {
-			result.WriteString(strings.ToUpper(part[:1]) + part[1:])
-		}
-	}
-	return result.String()
-}
-
-// extractSymbolsFromAST extracts symbols from the AST for document symbols (fallback)
-func extractSymbolsFromAST(node *documents.Node, symbols *[]interface{}) {
-	if node.Type == "class" || node.Type == "method" || node.Type == "module" {
-		kind := getSymbolKind(node.Type)
-		symbol := map[string]interface{}{
-			"name": node.Name,
-			"kind": kind,
-			"range": map[string]interface{}{
-				"start": node.Location.Start,
-				"end":   node.Location.End,
-			},
-			"selectionRange": map[string]interface{}{
-				"start": node.Location.Start,
-				"end":   node.Location.End,
-			},
-		}
-		*symbols = append(*symbols, symbol)
-	}
-
-	for _, child := range node.Children {
-		extractSymbolsFromAST(child, symbols)
-	}
-}
-
-// getSymbolKind maps node types to LSP symbol kinds
-func getSymbolKind(nodeType string) int {
-	switch nodeType {
-	case "class":
-		return 5
-	case "method":
-		return 6
-	case "module":
-		return 2
-	default:
-		return 1
-	}
 }

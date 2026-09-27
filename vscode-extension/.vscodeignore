@@ -1,0 +1,12 @@
+.gitignore
+build.sh
+tsconfig.json
+src/
+*.vsix
+README.md
+LICENSE.md
+.vscode/
+.git/
+**/*.map
+node_modules/.bin/
+node_modules/.cache/

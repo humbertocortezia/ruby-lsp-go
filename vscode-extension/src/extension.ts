@@ -1,7 +1,5 @@
 import * as path from "path";
 import * as fs from "fs";
-import * as cp from "child_process";
-import * as which from "which";
 import {
   ExtensionContext,
   workspace,
@@ -36,6 +34,11 @@ export async function activate(context: ExtensionContext) {
     );
     return;
   }
+
+  // Ensure the binary is executable. When a .vsix is installed, the execute
+  // permission bit is often lost during extraction, which would make the
+  // language server fail to spawn (EACCES) and silently disable all features.
+  ensureExecutable(rubyLspGoPath);
 
   // Create the language client
   const serverOptions: ServerOptions = {
@@ -73,7 +76,19 @@ export async function activate(context: ExtensionContext) {
     clientOptions
   );
 
-  await client.start();
+  outputChannel.appendLine(`Starting Ruby LSP Go server: ${rubyLspGoPath}`);
+
+  try {
+    await client.start();
+    outputChannel.appendLine("Ruby LSP Go server started successfully");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    outputChannel.appendLine(`Failed to start Ruby LSP Go server: ${message}`);
+    window.showErrorMessage(
+      `Ruby LSP Go failed to start: ${message}. See the "Ruby LSP Go" output channel for details.`
+    );
+    return;
+  }
 
   // Register commands
   context.subscriptions.push(
@@ -85,6 +100,18 @@ export async function activate(context: ExtensionContext) {
   );
 
   outputChannel.appendLine("Ruby LSP Go extension activated");
+}
+
+function ensureExecutable(binaryPath: string): void {
+  if (process.platform === "win32") {
+    return;
+  }
+  try {
+    fs.chmodSync(binaryPath, 0o755);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    outputChannel.appendLine(`Warning: could not chmod +x ${binaryPath}: ${message}`);
+  }
 }
 
 export async function deactivate(): Promise<void> {
@@ -117,14 +144,43 @@ function getRubyLspGoPath(): string | undefined {
   }
 
   // 3. Fall back to system PATH
-  try {
-    const systemPath = which.sync("ruby-lsp-go");
+  const systemPath = findInPath("ruby-lsp-go");
+  if (systemPath) {
     outputChannel.appendLine(`Using system ruby-lsp-go: ${systemPath}`);
     return systemPath;
-  } catch (error) {
-    outputChannel.appendLine("Could not find ruby-lsp-go in PATH or bundled with the extension");
-    return undefined;
   }
+
+  outputChannel.appendLine("Could not find ruby-lsp-go in PATH or bundled with the extension");
+  return undefined;
+}
+
+// findInPath searches the PATH environment variable for an executable,
+// avoiding the external "which" dependency so the packaged extension has
+// no runtime node_modules requirements.
+function findInPath(executable: string): string | undefined {
+  const pathEnv = process.env.PATH || "";
+  const separator = process.platform === "win32" ? ";" : ":";
+  const exts =
+    process.platform === "win32"
+      ? (process.env.PATHEXT || ".EXE;.CMD;.BAT;.COM").split(";")
+      : [""];
+
+  for (const dir of pathEnv.split(separator)) {
+    if (!dir) {
+      continue;
+    }
+    for (const ext of exts) {
+      const candidate = path.join(dir, executable + ext);
+      try {
+        if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+          return candidate;
+        }
+      } catch {
+        // ignore unreadable entries
+      }
+    }
+  }
+  return undefined;
 }
 
 function getEnabledFeatures(): Record<string, boolean> {
