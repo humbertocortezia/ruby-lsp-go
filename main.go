@@ -79,6 +79,8 @@ func main() {
 			server.HandleDidChange(msg.Params)
 		case "textDocument/didSave":
 			server.HandleDidSave(msg.Params)
+		case "workspace/didChangeWatchedFiles":
+			server.HandleWatchedFiles(msg.Params)
 
 		// All requests — dispatched to worker pool
 		default:
@@ -101,20 +103,28 @@ func NewMessageScanner(reader *bufio.Reader) *MessageScanner {
 func (ms *MessageScanner) Scan() (lsp.Message, error) {
 	var msg lsp.Message
 
-	header, err := ms.reader.ReadString('\n')
-	if err != nil {
-		return msg, err
+	contentLength := -1
+	for {
+		header, err := ms.reader.ReadString('\n')
+		if err != nil {
+			return msg, err
+		}
+		trimmed := strings.TrimSpace(header)
+		if trimmed == "" {
+			break
+		}
+		if strings.HasPrefix(strings.ToLower(trimmed), "content-length:") {
+			if _, err := fmt.Sscanf(trimmed, "Content-Length: %d", &contentLength); err != nil {
+				return msg, fmt.Errorf("failed to parse Content-Length: %v", err)
+			}
+		}
 	}
-
-	var contentLength int
-	if _, err := fmt.Sscanf(header, "Content-Length: %d\r", &contentLength); err != nil {
-		return msg, fmt.Errorf("failed to parse Content-Length: %v", err)
+	if contentLength < 0 || contentLength > 64*1024*1024 {
+		return msg, fmt.Errorf("invalid Content-Length: %d", contentLength)
 	}
-
-	ms.reader.ReadString('\n')
 
 	buf := make([]byte, contentLength)
-	if _, err = io.ReadFull(ms.reader, buf); err != nil {
+	if _, err := io.ReadFull(ms.reader, buf); err != nil {
 		return msg, err
 	}
 
@@ -127,7 +137,7 @@ func (ms *MessageScanner) Scan() (lsp.Message, error) {
 		msg.ID = id
 	}
 	if method, ok := req["method"]; ok {
-		msg.Method = method.(string)
+		msg.Method, _ = method.(string)
 	}
 	if params, ok := req["params"]; ok {
 		msg.Params = params

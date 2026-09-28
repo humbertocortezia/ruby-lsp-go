@@ -21,6 +21,7 @@ const (
 	SymbolGlobalVariable   = types.IndexerSymbolGlobalVariable
 	SymbolScope            = types.IndexerSymbolScope
 	SymbolAssociation      = types.IndexerSymbolAssociation
+	SymbolLocalVariable    = types.IndexerSymbolLocalVariable
 )
 
 // EntryType classifies indexed Ruby entities.

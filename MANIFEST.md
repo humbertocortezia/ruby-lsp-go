@@ -64,15 +64,15 @@ The implementation maintains full compatibility with Ruby on Rails projects:
 ## Installation Process
 
 ### For Users
-1. Build/install the Go server binary
-2. Install the VS Code extension
-3. Configure settings as needed
+1. Install the VS Code extension package (the server binary is bundled per
+   platform)
+2. Configure settings as needed
 
 ### For Developers
 1. Set up Go build environment
-2. Build the server
-3. Build the extension
-4. Test with various Ruby/Rails projects
+2. Build the extension; this compiles the server for supported platforms and
+   embeds the binaries in the `.vsix`
+3. Test with various Ruby/Rails projects
 
 ## Technical Architecture
 
@@ -116,4 +116,3 @@ The architecture allows for easy extension of features while maintaining perform
 - Ruby on Rails teams working with large codebases
 - Development teams experiencing slow LSP response times
 - Anyone wanting a more responsive Ruby development environment
-

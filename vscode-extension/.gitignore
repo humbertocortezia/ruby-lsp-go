@@ -6,7 +6,7 @@ node_modules/
 out/
 dist/
 *.vsix
-bin/ruby-lsp-go
+bin/
 
 # OS / Editor
 .DS_Store

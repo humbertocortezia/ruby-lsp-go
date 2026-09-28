@@ -8,7 +8,17 @@
 - Node.js and npm for building the VS Code extension
 - Ruby and Bundler for Ruby project support
 
-### 2. Building the Go Server
+On macOS with Homebrew, install Go with:
+
+```bash
+brew install go
+go version
+```
+
+The official installation instructions are available at
+<https://go.dev/doc/install>.
+
+### 2. Building the Go Server (optional)
 
 ```bash
 # Clone or navigate to the ruby-lsp-go directory
@@ -46,17 +56,18 @@ chmod +x build.sh
 ```
 
 This will create a `.vsix` file that can be installed in VS Code.
+The build also compiles the Go server for macOS, Linux, and Windows and embeds
+those platform-specific binaries in the extension. Users installing this
+package do not need to add `ruby-lsp-go` to their `PATH`.
 
 ### 5. Alternative Extension Installation
 
 You can also install the extension directly from VS Code marketplace after publishing, or:
 ```bash
-# Install vsce if not already installed
-npm install -g vsce
-
 # Package and install
-vsce package
-code --install-extension ruby-lsp-go-*.vsix
+npx @vscode/vsce package
+
+code --install-extension vscode-ruby-lsp-go-*.vsix
 ```
 
 ### 6. Configuration
@@ -65,7 +76,8 @@ After installation, configure the extension in VS Code Settings:
 
 - Open VS Code Settings (Ctrl/Cmd + ,)
 - Search for "Ruby LSP Go"
-- Optionally set the path to the binary if not in PATH
+- Optionally set `rubyLspGo.path` to use a custom binary instead of the one
+  bundled in the extension
 
 ### 7. Ruby on Rails Specific Setup
 
@@ -89,8 +101,10 @@ To maximize performance with the Go implementation:
 Common issues and solutions:
 
 - If "Ruby LSP Go executable not found" error occurs:
-  - Verify the binary is in your PATH
-  - Check the `rubyLspGo.path` setting in VS Code
+  - Confirm the extension was built with `./build.sh` and reinstalled from the
+    generated `.vsix`
+  - Check the "Ruby LSP Go" output panel for the detected platform and path
+  - If using a custom binary, verify the `rubyLspGo.path` setting or PATH
 
 - For gem-related issues:
   - Ensure Bundler is set up correctly in your project
@@ -99,4 +113,3 @@ Common issues and solutions:
 - For performance issues:
   - The Go server should perform much better than Ruby implementations
   - If experiencing issues, check the "Ruby LSP Go" output panel in VS Code
-

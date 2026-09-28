@@ -11,9 +11,6 @@
     "type": "git",
     "url": "https://github.com/humbertocortezia/ruby-lsp-go"
   },
-  "engines": {
-    "vscode": "^1.74.0"
-  },
   "extensionKind": [
     "workspace"
   ],
@@ -39,6 +36,16 @@
   ],
   "main": "./out/extension.js",
   "contributes": {
+    "commands": [
+      {
+        "command": "rubyLspGo.restart",
+        "title": "Ruby LSP Go: Restart Server"
+      },
+      {
+        "command": "rubyLspGo.reindexWorkspace",
+        "title": "Ruby LSP Go: Reindex Workspace"
+      }
+    ],
     "configuration": {
       "type": "object",
       "title": "Ruby LSP Go",
@@ -198,8 +205,7 @@
   "scripts": {
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "pretest": "npm run compile",
-    "test": "node ./out/test/runTest.js"
+    "test": "npm run compile"
   },
   "engines": {
     "node": ">=18.0.0",
@@ -216,4 +222,3 @@
     "vscode-languageclient": "^9.0.1"
   }
 }
-

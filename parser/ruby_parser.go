@@ -31,10 +31,10 @@ const (
 
 // Token represents a lexical token
 type Token struct {
-	Type     TokenType
-	Literal  string
-	Line     int
-	Column   int
+	Type    TokenType
+	Literal string
+	Line    int
+	Column  int
 }
 
 // NodeType represents the type of an AST node
@@ -91,15 +91,15 @@ type Range struct {
 
 // Node represents an AST node
 type Node struct {
-	Type         NodeType  `json:"type"`
-	Name         string    `json:"name,omitempty"`
-	NamePosition Position  `json:"namePosition,omitempty"`
-	Value        string    `json:"value,omitempty"`
-	Range        Range     `json:"range"`
-	Children     []*Node   `json:"children,omitempty"`
-	Parent       *Node     `json:"-"`
-	Visibility   string    `json:"visibility,omitempty"`
-	Detail       string    `json:"detail,omitempty"`
+	Type         NodeType `json:"type"`
+	Name         string   `json:"name,omitempty"`
+	NamePosition Position `json:"namePosition,omitempty"`
+	Value        string   `json:"value,omitempty"`
+	Range        Range    `json:"range"`
+	Children     []*Node  `json:"children,omitempty"`
+	Parent       *Node    `json:"-"`
+	Visibility   string   `json:"visibility,omitempty"`
+	Detail       string   `json:"detail,omitempty"`
 }
 
 // Contains checks if a position is within the node's range
@@ -130,10 +130,10 @@ func Parse(source string) (*Node, error) {
 		source: source,
 		lines:  strings.Split(source, "\n"),
 	}
-	
+
 	parser.tokenize()
 	ast := parser.parse()
-	
+
 	return ast, nil
 }
 
@@ -142,23 +142,23 @@ func (p *RubyParser) tokenize() {
 	p.tokens = []Token{}
 	line := 0
 	column := 0
-	
+
 	for i := 0; i < len(p.source); i++ {
 		ch := p.source[i]
-		
+
 		if ch == '\n' {
 			p.tokens = append(p.tokens, Token{Type: TokenNewline, Literal: "\n", Line: line, Column: column})
 			line++
 			column = 0
 			continue
 		}
-		
+
 		if ch == ' ' || ch == '\t' || ch == '\r' {
 			p.tokens = append(p.tokens, Token{Type: TokenWhitespace, Literal: string(ch), Line: line, Column: column})
 			column++
 			continue
 		}
-		
+
 		if ch == '#' {
 			// Comment
 			start := i
@@ -175,7 +175,7 @@ func (p *RubyParser) tokenize() {
 			i-- // back up one since the loop will increment
 			continue
 		}
-		
+
 		if ch == '"' || ch == '\'' {
 			// String
 			quote := ch
@@ -200,7 +200,7 @@ func (p *RubyParser) tokenize() {
 			column += i - start + 1
 			continue
 		}
-		
+
 		if ch == '/' && i+1 < len(p.source) && p.source[i+1] != ' ' && p.source[i+1] != '\n' {
 			// Could be regex - check previous token
 			isRegex := true
@@ -212,7 +212,7 @@ func (p *RubyParser) tokenize() {
 					isRegex = false
 				}
 			}
-			
+
 			if isRegex {
 				start := i
 				i++
@@ -236,7 +236,7 @@ func (p *RubyParser) tokenize() {
 				continue
 			}
 		}
-		
+
 		if ch == ':' && i+1 < len(p.source) {
 			nextCh := p.source[i+1]
 			if nextCh == '\'' || nextCh == '"' {
@@ -280,7 +280,7 @@ func (p *RubyParser) tokenize() {
 				continue
 			}
 		}
-		
+
 		if ch == '@' && i+1 < len(p.source) && p.source[i+1] == '@' {
 			// Class variable
 			start := i
@@ -298,7 +298,7 @@ func (p *RubyParser) tokenize() {
 			i--
 			continue
 		}
-		
+
 		if ch == '@' {
 			// Instance variable
 			start := i
@@ -316,7 +316,7 @@ func (p *RubyParser) tokenize() {
 			i--
 			continue
 		}
-		
+
 		if ch == '$' {
 			// Global variable
 			start := i
@@ -334,7 +334,7 @@ func (p *RubyParser) tokenize() {
 			i--
 			continue
 		}
-		
+
 		if unicode.IsDigit(rune(ch)) {
 			start := i
 			for i < len(p.source) && (unicode.IsDigit(rune(p.source[i])) || p.source[i] == '.' || p.source[i] == '_') {
@@ -350,7 +350,7 @@ func (p *RubyParser) tokenize() {
 			i--
 			continue
 		}
-		
+
 		if unicode.IsUpper(rune(ch)) {
 			// Constant
 			start := i
@@ -367,19 +367,19 @@ func (p *RubyParser) tokenize() {
 			i--
 			continue
 		}
-		
+
 		if unicode.IsLetter(rune(ch)) || ch == '_' {
 			start := i
 			for i < len(p.source) && (unicode.IsLetter(rune(p.source[i])) || unicode.IsDigit(rune(p.source[i])) || p.source[i] == '_' || p.source[i] == '!' || p.source[i] == '?' || p.source[i] == '=') {
 				i++
 			}
 			literal := p.source[start:i]
-			
+
 			tokenType := TokenIdentifier
 			if isKeyword(literal) {
 				tokenType = TokenKeyword
 			}
-			
+
 			p.tokens = append(p.tokens, Token{
 				Type:    tokenType,
 				Literal: literal,
@@ -390,7 +390,7 @@ func (p *RubyParser) tokenize() {
 			i--
 			continue
 		}
-		
+
 		if isOperator(string(ch)) {
 			// Multi-char operators
 			if i+1 < len(p.source) {
@@ -416,7 +416,7 @@ func (p *RubyParser) tokenize() {
 			column++
 			continue
 		}
-		
+
 		if ch == '(' || ch == ')' || ch == '{' || ch == '}' || ch == '[' || ch == ']' || ch == ',' || ch == ';' || ch == '.' {
 			p.tokens = append(p.tokens, Token{
 				Type:    TokenPunctuation,
@@ -427,11 +427,11 @@ func (p *RubyParser) tokenize() {
 			column++
 			continue
 		}
-		
+
 		// Unknown character, skip
 		column++
 	}
-	
+
 	p.tokens = append(p.tokens, Token{Type: TokenEOF, Literal: "", Line: line, Column: column})
 }
 
@@ -444,47 +444,47 @@ func (p *RubyParser) parse() *Node {
 			End:   Position{Line: len(p.lines) - 1, Character: len(p.lines[len(p.lines)-1])},
 		},
 	}
-	
+
 	p.pos = 0
-	
+
 	for p.pos < len(p.tokens) {
 		p.skipWhitespaceAndNewlines()
 		if p.pos >= len(p.tokens) || p.tokens[p.pos].Type == TokenEOF {
 			break
 		}
-		
+
 		// Skip orphaned 'end' tokens at the top level
 		if p.tokens[p.pos].Type == TokenKeyword && p.tokens[p.pos].Literal == "end" {
 			p.pos++
 			continue
 		}
-		
+
 		node := p.parseStatement()
 		if node != nil {
 			node.Parent = program
 			program.Children = append(program.Children, node)
 		}
 	}
-	
+
 	return program
 }
 
 // parseStatement parses a single statement
 func (p *RubyParser) parseStatement() *Node {
 	p.skipWhitespaceAndNewlines()
-	
+
 	if p.pos >= len(p.tokens) || p.tokens[p.pos].Type == TokenEOF {
 		return nil
 	}
-	
+
 	tok := p.tokens[p.pos]
-	
+
 	// Skip comments at statement level
 	if tok.Type == TokenComment {
 		p.pos++
 		return p.parseComment()
 	}
-	
+
 	if tok.Type == TokenKeyword {
 		switch tok.Literal {
 		case "class":
@@ -513,48 +513,48 @@ func (p *RubyParser) parseStatement() *Node {
 			return p.parseKeywordStatement()
 		}
 	}
-	
+
 	if tok.Type == TokenConstant && p.peekToken().Literal == "=" {
 		return p.parseConstantAssignment()
 	}
-	
+
 	if tok.Type == TokenInstanceVariable && p.peekToken().Literal == "=" {
 		return p.parseInstanceVariableAssignment()
 	}
-	
+
 	if tok.Type == TokenClassVariable && p.peekToken().Literal == "=" {
 		return p.parseClassVariableAssignment()
 	}
-	
+
 	if tok.Type == TokenGlobalVariable && p.peekToken().Literal == "=" {
 		return p.parseGlobalVariableAssignment()
 	}
-	
+
 	// Check for attr_accessor, attr_reader, attr_writer
 	if tok.Type == TokenIdentifier && (tok.Literal == "attr_accessor" || tok.Literal == "attr_reader" || tok.Literal == "attr_writer") {
 		return p.parseAttrAccessor()
 	}
-	
+
 	// Check for visibility modifiers with arguments
 	if tok.Type == TokenIdentifier && (tok.Literal == "private" || tok.Literal == "protected" || tok.Literal == "public") {
 		return p.parseVisibilityModifier()
 	}
-	
+
 	// Check for include/extend/prepend
 	if tok.Type == TokenIdentifier && (tok.Literal == "include" || tok.Literal == "extend" || tok.Literal == "prepend") {
 		return p.parseModuleOperation()
 	}
-	
+
 	// Check for scope, belongs_to, has_many, etc.
 	if tok.Type == TokenIdentifier && isRailsMacro(tok.Literal) {
 		return p.parseRailsMacro()
 	}
-	
+
 	// Check for require/require_relative
 	if tok.Type == TokenIdentifier && (tok.Literal == "require" || tok.Literal == "require_relative") {
 		return p.parseRequire()
 	}
-	
+
 	// Default: parse as expression
 	return p.parseExpression()
 }
@@ -598,9 +598,9 @@ func (p *RubyParser) parseClass() *Node {
 			End:   Position{Line: startLine, Character: startCol},
 		},
 	}
-	
+
 	p.parseBody(classNode, "end")
-	
+
 	// Update end position
 	if len(classNode.Children) > 0 {
 		lastChild := classNode.Children[len(classNode.Children)-1]
@@ -608,7 +608,7 @@ func (p *RubyParser) parseClass() *Node {
 	} else {
 		classNode.Range.End = Position{Line: startLine + 1, Character: 3} // "end"
 	}
-	
+
 	return classNode
 }
 
@@ -643,16 +643,16 @@ func (p *RubyParser) parseModule() *Node {
 			End:   Position{Line: startLine, Character: startCol},
 		},
 	}
-	
+
 	p.parseBody(moduleNode, "end")
-	
+
 	if len(moduleNode.Children) > 0 {
 		lastChild := moduleNode.Children[len(moduleNode.Children)-1]
 		moduleNode.Range.End = Position{Line: lastChild.Range.End.Line + 1, Character: 0}
 	} else {
 		moduleNode.Range.End = Position{Line: startLine + 1, Character: 3}
 	}
-	
+
 	return moduleNode
 }
 
@@ -667,6 +667,7 @@ func (p *RubyParser) parseMethod() *Node {
 	methodName := ""
 	nameLine := 0
 	nameCol := 0
+	p.skipWhitespaceAndNewlines()
 
 	if p.pos < len(p.tokens) && p.tokens[p.pos].Literal == "self" {
 		p.pos++ // consume 'self'
@@ -710,16 +711,16 @@ func (p *RubyParser) parseMethod() *Node {
 			End:   Position{Line: startLine, Character: startCol},
 		},
 	}
-	
+
 	p.parseBody(methodNode, "end")
-	
+
 	if len(methodNode.Children) > 0 {
 		lastChild := methodNode.Children[len(methodNode.Children)-1]
 		methodNode.Range.End = Position{Line: lastChild.Range.End.Line + 1, Character: 0}
 	} else {
 		methodNode.Range.End = Position{Line: startLine + 1, Character: 3}
 	}
-	
+
 	return methodNode
 }
 
@@ -729,7 +730,7 @@ func (p *RubyParser) parseIf() *Node {
 	startLine := startTok.Line
 	startCol := startTok.Column
 	p.pos++ // consume 'if'
-	
+
 	ifNode := &Node{
 		Type: NodeIf,
 		Range: Range{
@@ -737,7 +738,7 @@ func (p *RubyParser) parseIf() *Node {
 			End:   Position{Line: startLine, Character: startCol},
 		},
 	}
-	
+
 	// Skip condition
 	for p.pos < len(p.tokens) && p.tokens[p.pos].Type != TokenNewline && p.tokens[p.pos].Type != TokenEOF &&
 		!(p.tokens[p.pos].Type == TokenKeyword && p.tokens[p.pos].Literal == "then") {
@@ -746,16 +747,16 @@ func (p *RubyParser) parseIf() *Node {
 	if p.pos < len(p.tokens) && p.tokens[p.pos].Literal == "then" {
 		p.pos++
 	}
-	
+
 	p.parseBodyWithElsif(ifNode, "end")
-	
+
 	if len(ifNode.Children) > 0 {
 		lastChild := ifNode.Children[len(ifNode.Children)-1]
 		ifNode.Range.End = Position{Line: lastChild.Range.End.Line + 1, Character: 0}
 	} else {
 		ifNode.Range.End = Position{Line: startLine + 1, Character: 3}
 	}
-	
+
 	return ifNode
 }
 
@@ -765,7 +766,7 @@ func (p *RubyParser) parseUnless() *Node {
 	startLine := startTok.Line
 	startCol := startTok.Column
 	p.pos++ // consume 'unless'
-	
+
 	unlessNode := &Node{
 		Type: NodeUnless,
 		Range: Range{
@@ -773,7 +774,7 @@ func (p *RubyParser) parseUnless() *Node {
 			End:   Position{Line: startLine, Character: startCol},
 		},
 	}
-	
+
 	// Skip condition
 	for p.pos < len(p.tokens) && p.tokens[p.pos].Type != TokenNewline && p.tokens[p.pos].Type != TokenEOF &&
 		!(p.tokens[p.pos].Type == TokenKeyword && p.tokens[p.pos].Literal == "then") {
@@ -782,16 +783,16 @@ func (p *RubyParser) parseUnless() *Node {
 	if p.pos < len(p.tokens) && p.tokens[p.pos].Literal == "then" {
 		p.pos++
 	}
-	
+
 	p.parseBody(unlessNode, "end")
-	
+
 	if len(unlessNode.Children) > 0 {
 		lastChild := unlessNode.Children[len(unlessNode.Children)-1]
 		unlessNode.Range.End = Position{Line: lastChild.Range.End.Line + 1, Character: 0}
 	} else {
 		unlessNode.Range.End = Position{Line: startLine + 1, Character: 3}
 	}
-	
+
 	return unlessNode
 }
 
@@ -801,7 +802,7 @@ func (p *RubyParser) parseCase() *Node {
 	startLine := startTok.Line
 	startCol := startTok.Column
 	p.pos++ // consume 'case'
-	
+
 	caseNode := &Node{
 		Type: NodeCase,
 		Range: Range{
@@ -809,21 +810,21 @@ func (p *RubyParser) parseCase() *Node {
 			End:   Position{Line: startLine, Character: startCol},
 		},
 	}
-	
+
 	// Skip expression
 	for p.pos < len(p.tokens) && p.tokens[p.pos].Type != TokenNewline && p.tokens[p.pos].Type != TokenEOF {
 		p.pos++
 	}
-	
+
 	p.parseBodyWithWhen(caseNode, "end")
-	
+
 	if len(caseNode.Children) > 0 {
 		lastChild := caseNode.Children[len(caseNode.Children)-1]
 		caseNode.Range.End = Position{Line: lastChild.Range.End.Line + 1, Character: 0}
 	} else {
 		caseNode.Range.End = Position{Line: startLine + 1, Character: 3}
 	}
-	
+
 	return caseNode
 }
 
@@ -833,7 +834,7 @@ func (p *RubyParser) parseWhile() *Node {
 	startLine := startTok.Line
 	startCol := startTok.Column
 	p.pos++ // consume 'while'
-	
+
 	whileNode := &Node{
 		Type: NodeWhile,
 		Range: Range{
@@ -841,7 +842,7 @@ func (p *RubyParser) parseWhile() *Node {
 			End:   Position{Line: startLine, Character: startCol},
 		},
 	}
-	
+
 	// Skip condition
 	for p.pos < len(p.tokens) && p.tokens[p.pos].Type != TokenNewline && p.tokens[p.pos].Type != TokenEOF &&
 		!(p.tokens[p.pos].Type == TokenKeyword && p.tokens[p.pos].Literal == "do") {
@@ -850,16 +851,16 @@ func (p *RubyParser) parseWhile() *Node {
 	if p.pos < len(p.tokens) && p.tokens[p.pos].Literal == "do" {
 		p.pos++
 	}
-	
+
 	p.parseBody(whileNode, "end")
-	
+
 	if len(whileNode.Children) > 0 {
 		lastChild := whileNode.Children[len(whileNode.Children)-1]
 		whileNode.Range.End = Position{Line: lastChild.Range.End.Line + 1, Character: 0}
 	} else {
 		whileNode.Range.End = Position{Line: startLine + 1, Character: 3}
 	}
-	
+
 	return whileNode
 }
 
@@ -869,7 +870,7 @@ func (p *RubyParser) parseUntil() *Node {
 	startLine := startTok.Line
 	startCol := startTok.Column
 	p.pos++ // consume 'until'
-	
+
 	untilNode := &Node{
 		Type: NodeUntil,
 		Range: Range{
@@ -877,7 +878,7 @@ func (p *RubyParser) parseUntil() *Node {
 			End:   Position{Line: startLine, Character: startCol},
 		},
 	}
-	
+
 	// Skip condition
 	for p.pos < len(p.tokens) && p.tokens[p.pos].Type != TokenNewline && p.tokens[p.pos].Type != TokenEOF &&
 		!(p.tokens[p.pos].Type == TokenKeyword && p.tokens[p.pos].Literal == "do") {
@@ -886,16 +887,16 @@ func (p *RubyParser) parseUntil() *Node {
 	if p.pos < len(p.tokens) && p.tokens[p.pos].Literal == "do" {
 		p.pos++
 	}
-	
+
 	p.parseBody(untilNode, "end")
-	
+
 	if len(untilNode.Children) > 0 {
 		lastChild := untilNode.Children[len(untilNode.Children)-1]
 		untilNode.Range.End = Position{Line: lastChild.Range.End.Line + 1, Character: 0}
 	} else {
 		untilNode.Range.End = Position{Line: startLine + 1, Character: 3}
 	}
-	
+
 	return untilNode
 }
 
@@ -905,7 +906,7 @@ func (p *RubyParser) parseFor() *Node {
 	startLine := startTok.Line
 	startCol := startTok.Column
 	p.pos++ // consume 'for'
-	
+
 	forNode := &Node{
 		Type: NodeFor,
 		Range: Range{
@@ -913,7 +914,7 @@ func (p *RubyParser) parseFor() *Node {
 			End:   Position{Line: startLine, Character: startCol},
 		},
 	}
-	
+
 	// Skip iteration variables and expression
 	for p.pos < len(p.tokens) && p.tokens[p.pos].Type != TokenNewline && p.tokens[p.pos].Type != TokenEOF &&
 		!(p.tokens[p.pos].Type == TokenKeyword && p.tokens[p.pos].Literal == "do") {
@@ -922,16 +923,16 @@ func (p *RubyParser) parseFor() *Node {
 	if p.pos < len(p.tokens) && p.tokens[p.pos].Literal == "do" {
 		p.pos++
 	}
-	
+
 	p.parseBody(forNode, "end")
-	
+
 	if len(forNode.Children) > 0 {
 		lastChild := forNode.Children[len(forNode.Children)-1]
 		forNode.Range.End = Position{Line: lastChild.Range.End.Line + 1, Character: 0}
 	} else {
 		forNode.Range.End = Position{Line: startLine + 1, Character: 3}
 	}
-	
+
 	return forNode
 }
 
@@ -941,7 +942,7 @@ func (p *RubyParser) parseBegin() *Node {
 	startLine := startTok.Line
 	startCol := startTok.Column
 	p.pos++ // consume 'begin'
-	
+
 	beginNode := &Node{
 		Type: NodeBegin,
 		Range: Range{
@@ -949,16 +950,16 @@ func (p *RubyParser) parseBegin() *Node {
 			End:   Position{Line: startLine, Character: startCol},
 		},
 	}
-	
+
 	p.parseBodyWithRescue(beginNode, "end")
-	
+
 	if len(beginNode.Children) > 0 {
 		lastChild := beginNode.Children[len(beginNode.Children)-1]
 		beginNode.Range.End = Position{Line: lastChild.Range.End.Line + 1, Character: 0}
 	} else {
 		beginNode.Range.End = Position{Line: startLine + 1, Character: 3}
 	}
-	
+
 	return beginNode
 }
 
@@ -968,26 +969,26 @@ func (p *RubyParser) parseAlias() *Node {
 	startLine := startTok.Line
 	startCol := startTok.Column
 	p.pos++ // consume 'alias'
-	
+
 	p.skipWhitespaceAndNewlines()
-	
+
 	newName := ""
 	if p.pos < len(p.tokens) {
 		newName = p.tokens[p.pos].Literal
 		p.pos++
 	}
-	
+
 	p.skipWhitespaceAndNewlines()
-	
+
 	oldName := ""
 	if p.pos < len(p.tokens) {
 		oldName = p.tokens[p.pos].Literal
 		p.pos++
 	}
-	
+
 	return &Node{
-		Type: NodeAlias,
-		Name: newName,
+		Type:  NodeAlias,
+		Name:  newName,
 		Value: oldName,
 		Range: Range{
 			Start: Position{Line: startLine, Character: startCol},
@@ -1003,9 +1004,9 @@ func (p *RubyParser) parseAttrAccessor() *Node {
 	startCol := startTok.Column
 	accessorType := startTok.Literal
 	p.pos++
-	
+
 	p.skipWhitespaceAndNewlines()
-	
+
 	// Collect attribute names
 	var attrs []string
 	for p.pos < len(p.tokens) && p.tokens[p.pos].Type != TokenNewline && p.tokens[p.pos].Type != TokenEOF {
@@ -1020,7 +1021,7 @@ func (p *RubyParser) parseAttrAccessor() *Node {
 		}
 		p.pos++
 	}
-	
+
 	attrNode := &Node{
 		Type:   NodeAttrAccessor,
 		Name:   accessorType,
@@ -1031,14 +1032,14 @@ func (p *RubyParser) parseAttrAccessor() *Node {
 			End:   Position{Line: startLine, Character: startCol},
 		},
 	}
-	
+
 	// Find end of line
 	endCol := startCol
 	if startLine < len(p.lines) {
 		endCol = len(p.lines[startLine])
 	}
 	attrNode.Range.End = Position{Line: startLine, Character: endCol}
-	
+
 	return attrNode
 }
 
@@ -1049,9 +1050,9 @@ func (p *RubyParser) parseVisibilityModifier() *Node {
 	startCol := startTok.Column
 	visibility := startTok.Literal
 	p.pos++
-	
+
 	p.skipWhitespaceAndNewlines()
-	
+
 	// Check if followed by method names or method definition
 	if p.pos < len(p.tokens) && (p.tokens[p.pos].Type == TokenIdentifier || p.tokens[p.pos].Type == TokenSymbol || p.tokens[p.pos].Type == TokenString) {
 		// Method names listed
@@ -1068,7 +1069,7 @@ func (p *RubyParser) parseVisibilityModifier() *Node {
 			}
 			p.pos++
 		}
-		
+
 		return &Node{
 			Type:       NodeCall,
 			Name:       visibility,
@@ -1080,7 +1081,7 @@ func (p *RubyParser) parseVisibilityModifier() *Node {
 			},
 		}
 	}
-	
+
 	// Just a visibility change statement
 	return &Node{
 		Type:       NodeCall,
@@ -1100,15 +1101,15 @@ func (p *RubyParser) parseModuleOperation() *Node {
 	startCol := startTok.Column
 	operation := startTok.Literal
 	p.pos++
-	
+
 	p.skipWhitespaceAndNewlines()
-	
+
 	moduleName := ""
 	if p.pos < len(p.tokens) && (p.tokens[p.pos].Type == TokenConstant || p.tokens[p.pos].Type == TokenIdentifier) {
 		moduleName = p.tokens[p.pos].Literal
 		p.pos++
 	}
-	
+
 	return &Node{
 		Type:  NodeCall,
 		Name:  operation,
@@ -1127,9 +1128,9 @@ func (p *RubyParser) parseRailsMacro() *Node {
 	startCol := startTok.Column
 	macroName := startTok.Literal
 	p.pos++
-	
+
 	p.skipWhitespaceAndNewlines()
-	
+
 	macroValue := ""
 	if p.pos < len(p.tokens) && (p.tokens[p.pos].Type == TokenSymbol || p.tokens[p.pos].Type == TokenString || p.tokens[p.pos].Type == TokenIdentifier) {
 		macroValue = p.tokens[p.pos].Literal
@@ -1140,17 +1141,17 @@ func (p *RubyParser) parseRailsMacro() *Node {
 		}
 		p.pos++
 	}
-	
+
 	// Skip rest of line
 	for p.pos < len(p.tokens) && p.tokens[p.pos].Type != TokenNewline && p.tokens[p.pos].Type != TokenEOF {
 		p.pos++
 	}
-	
+
 	nodeType := NodeCall
 	if macroName == "scope" {
 		nodeType = NodeMethod // Scopes are callable
 	}
-	
+
 	return &Node{
 		Type:   nodeType,
 		Name:   macroValue,
@@ -1170,9 +1171,9 @@ func (p *RubyParser) parseRequire() *Node {
 	startCol := startTok.Column
 	requireType := startTok.Literal
 	p.pos++
-	
+
 	p.skipWhitespaceAndNewlines()
-	
+
 	moduleName := ""
 	if p.pos < len(p.tokens) && (p.tokens[p.pos].Type == TokenString || p.tokens[p.pos].Type == TokenIdentifier) {
 		moduleName = p.tokens[p.pos].Literal
@@ -1181,10 +1182,10 @@ func (p *RubyParser) parseRequire() *Node {
 		}
 		p.pos++
 	}
-	
+
 	return &Node{
-		Type: NodeRequire,
-		Name: requireType,
+		Type:  NodeRequire,
+		Name:  requireType,
 		Value: moduleName,
 		Range: Range{
 			Start: Position{Line: startLine, Character: startCol},
@@ -1200,7 +1201,7 @@ func (p *RubyParser) parseConstantAssignment() *Node {
 	startCol := startTok.Column
 	constName := startTok.Literal
 	p.pos += 2 // consume constant and '='
-	
+
 	return &Node{
 		Type: NodeConstant,
 		Name: constName,
@@ -1218,7 +1219,7 @@ func (p *RubyParser) parseInstanceVariableAssignment() *Node {
 	startCol := startTok.Column
 	varName := startTok.Literal
 	p.pos += 2 // consume variable and '='
-	
+
 	return &Node{
 		Type: NodeInstanceVariable,
 		Name: varName,
@@ -1236,7 +1237,7 @@ func (p *RubyParser) parseClassVariableAssignment() *Node {
 	startCol := startTok.Column
 	varName := startTok.Literal
 	p.pos += 2 // consume variable and '='
-	
+
 	return &Node{
 		Type: NodeClassVariable,
 		Name: varName,
@@ -1254,7 +1255,7 @@ func (p *RubyParser) parseGlobalVariableAssignment() *Node {
 	startCol := startTok.Column
 	varName := startTok.Literal
 	p.pos += 2 // consume variable and '='
-	
+
 	return &Node{
 		Type: NodeGlobalVariable,
 		Name: varName,
@@ -1272,12 +1273,12 @@ func (p *RubyParser) parseKeywordStatement() *Node {
 	startCol := startTok.Column
 	keyword := startTok.Literal
 	p.pos++
-	
+
 	// Skip rest of line
 	for p.pos < len(p.tokens) && p.tokens[p.pos].Type != TokenNewline && p.tokens[p.pos].Type != TokenEOF {
 		p.pos++
 	}
-	
+
 	return &Node{
 		Type: NodeCall,
 		Name: keyword,
@@ -1293,7 +1294,7 @@ func (p *RubyParser) parseExpression() *Node {
 	startTok := p.tokens[p.pos]
 	startLine := startTok.Line
 	startCol := startTok.Column
-	
+
 	// Skip to end of statement
 	for p.pos < len(p.tokens) && p.tokens[p.pos].Type != TokenNewline && p.tokens[p.pos].Type != TokenEOF &&
 		!(p.tokens[p.pos].Type == TokenKeyword && p.tokens[p.pos].Literal == "end") {
@@ -1308,7 +1309,7 @@ func (p *RubyParser) parseExpression() *Node {
 		}
 		p.pos++
 	}
-	
+
 	return &Node{
 		Type: NodeCall,
 		Range: Range{
@@ -1322,7 +1323,7 @@ func (p *RubyParser) parseExpression() *Node {
 func (p *RubyParser) parseComment() *Node {
 	startTok := p.tokens[p.pos-1]
 	return &Node{
-		Type: NodeComment,
+		Type:  NodeComment,
 		Value: startTok.Literal,
 		Range: Range{
 			Start: Position{Line: startTok.Line, Character: startTok.Column},
@@ -1334,14 +1335,14 @@ func (p *RubyParser) parseComment() *Node {
 // parseBody parses the body of a block until an end keyword is found
 func (p *RubyParser) parseBody(parent *Node, endKeyword string) {
 	depth := 1
-	
+
 	for p.pos < len(p.tokens) && p.tokens[p.pos].Type != TokenEOF {
 		p.skipWhitespaceAndNewlines()
-		
+
 		if p.pos >= len(p.tokens) || p.tokens[p.pos].Type == TokenEOF {
 			break
 		}
-		
+
 		// Check for nested structures that increase depth
 		if p.tokens[p.pos].Type == TokenKeyword {
 			switch p.tokens[p.pos].Literal {
@@ -1355,7 +1356,7 @@ func (p *RubyParser) parseBody(parent *Node, endKeyword string) {
 				}
 			}
 		}
-		
+
 		node := p.parseStatement()
 		if node != nil {
 			node.Parent = parent
@@ -1374,14 +1375,14 @@ func (p *RubyParser) parseBody(parent *Node, endKeyword string) {
 // parseBodyWithElsif parses body with elsif/else support
 func (p *RubyParser) parseBodyWithElsif(parent *Node, endKeyword string) {
 	depth := 1
-	
+
 	for p.pos < len(p.tokens) && p.tokens[p.pos].Type != TokenEOF {
 		p.skipWhitespaceAndNewlines()
-		
+
 		if p.pos >= len(p.tokens) || p.tokens[p.pos].Type == TokenEOF {
 			break
 		}
-		
+
 		if p.tokens[p.pos].Type == TokenKeyword {
 			switch p.tokens[p.pos].Literal {
 			case "elsif":
@@ -1404,7 +1405,7 @@ func (p *RubyParser) parseBodyWithElsif(parent *Node, endKeyword string) {
 				}
 			}
 		}
-		
+
 		node := p.parseStatement()
 		if node != nil {
 			node.Parent = parent
@@ -1422,14 +1423,14 @@ func (p *RubyParser) parseBodyWithElsif(parent *Node, endKeyword string) {
 // parseBodyWithWhen parses body with when/else support
 func (p *RubyParser) parseBodyWithWhen(parent *Node, endKeyword string) {
 	depth := 1
-	
+
 	for p.pos < len(p.tokens) && p.tokens[p.pos].Type != TokenEOF {
 		p.skipWhitespaceAndNewlines()
-		
+
 		if p.pos >= len(p.tokens) || p.tokens[p.pos].Type == TokenEOF {
 			break
 		}
-		
+
 		if p.tokens[p.pos].Type == TokenKeyword {
 			switch p.tokens[p.pos].Literal {
 			case "when":
@@ -1452,7 +1453,7 @@ func (p *RubyParser) parseBodyWithWhen(parent *Node, endKeyword string) {
 				}
 			}
 		}
-		
+
 		node := p.parseStatement()
 		if node != nil {
 			node.Parent = parent
@@ -1470,14 +1471,14 @@ func (p *RubyParser) parseBodyWithWhen(parent *Node, endKeyword string) {
 // parseBodyWithRescue parses body with rescue/else/ensure support
 func (p *RubyParser) parseBodyWithRescue(parent *Node, endKeyword string) {
 	depth := 1
-	
+
 	for p.pos < len(p.tokens) && p.tokens[p.pos].Type != TokenEOF {
 		p.skipWhitespaceAndNewlines()
-		
+
 		if p.pos >= len(p.tokens) || p.tokens[p.pos].Type == TokenEOF {
 			break
 		}
-		
+
 		if p.tokens[p.pos].Type == TokenKeyword {
 			switch p.tokens[p.pos].Literal {
 			case "rescue":
@@ -1505,7 +1506,7 @@ func (p *RubyParser) parseBodyWithRescue(parent *Node, endKeyword string) {
 				}
 			}
 		}
-		
+
 		node := p.parseStatement()
 		if node != nil {
 			node.Parent = parent
@@ -1526,7 +1527,7 @@ func (p *RubyParser) parseElsif() *Node {
 	startLine := startTok.Line
 	startCol := startTok.Column
 	p.pos++ // consume 'elsif'
-	
+
 	elsifNode := &Node{
 		Type: NodeElsif,
 		Range: Range{
@@ -1534,7 +1535,7 @@ func (p *RubyParser) parseElsif() *Node {
 			End:   Position{Line: startLine, Character: startCol},
 		},
 	}
-	
+
 	// Skip condition
 	for p.pos < len(p.tokens) && p.tokens[p.pos].Type != TokenNewline && p.tokens[p.pos].Type != TokenEOF &&
 		!(p.tokens[p.pos].Type == TokenKeyword && p.tokens[p.pos].Literal == "then") {
@@ -1543,15 +1544,15 @@ func (p *RubyParser) parseElsif() *Node {
 	if p.pos < len(p.tokens) && p.tokens[p.pos].Literal == "then" {
 		p.pos++
 	}
-	
+
 	// Parse body until elsif, else, or end
 	for p.pos < len(p.tokens) && p.tokens[p.pos].Type != TokenEOF {
 		p.skipWhitespaceAndNewlines()
-		
+
 		if p.pos >= len(p.tokens) {
 			break
 		}
-		
+
 		if p.tokens[p.pos].Type == TokenKeyword {
 			switch p.tokens[p.pos].Literal {
 			case "elsif", "else", "end":
@@ -1573,19 +1574,19 @@ func (p *RubyParser) parseElsif() *Node {
 				continue
 			}
 		}
-		
+
 		node := p.parseStatement()
 		if node != nil {
 			node.Parent = elsifNode
 			elsifNode.Children = append(elsifNode.Children, node)
 		}
 	}
-	
+
 	if len(elsifNode.Children) > 0 {
 		lastChild := elsifNode.Children[len(elsifNode.Children)-1]
 		elsifNode.Range.End = Position{Line: lastChild.Range.End.Line + 1, Character: 0}
 	}
-	
+
 	return elsifNode
 }
 
@@ -1595,7 +1596,7 @@ func (p *RubyParser) parseElse() *Node {
 	startLine := startTok.Line
 	startCol := startTok.Column
 	p.pos++ // consume 'else'
-	
+
 	elseNode := &Node{
 		Type: NodeElse,
 		Range: Range{
@@ -1603,15 +1604,15 @@ func (p *RubyParser) parseElse() *Node {
 			End:   Position{Line: startLine, Character: startCol + 4},
 		},
 	}
-	
+
 	// Parse body until end
 	for p.pos < len(p.tokens) && p.tokens[p.pos].Type != TokenEOF {
 		p.skipWhitespaceAndNewlines()
-		
+
 		if p.pos >= len(p.tokens) {
 			break
 		}
-		
+
 		if p.tokens[p.pos].Type == TokenKeyword && p.tokens[p.pos].Literal == "end" {
 			if len(elseNode.Children) > 0 {
 				lastChild := elseNode.Children[len(elseNode.Children)-1]
@@ -1619,19 +1620,19 @@ func (p *RubyParser) parseElse() *Node {
 			}
 			return elseNode
 		}
-		
+
 		node := p.parseStatement()
 		if node != nil {
 			node.Parent = elseNode
 			elseNode.Children = append(elseNode.Children, node)
 		}
 	}
-	
+
 	if len(elseNode.Children) > 0 {
 		lastChild := elseNode.Children[len(elseNode.Children)-1]
 		elseNode.Range.End = Position{Line: lastChild.Range.End.Line + 1, Character: 0}
 	}
-	
+
 	return elseNode
 }
 
@@ -1641,7 +1642,7 @@ func (p *RubyParser) parseWhen() *Node {
 	startLine := startTok.Line
 	startCol := startTok.Column
 	p.pos++ // consume 'when'
-	
+
 	whenNode := &Node{
 		Type: NodeWhen,
 		Range: Range{
@@ -1649,7 +1650,7 @@ func (p *RubyParser) parseWhen() *Node {
 			End:   Position{Line: startLine, Character: startCol},
 		},
 	}
-	
+
 	// Skip condition
 	for p.pos < len(p.tokens) && p.tokens[p.pos].Type != TokenNewline && p.tokens[p.pos].Type != TokenEOF &&
 		!(p.tokens[p.pos].Type == TokenKeyword && p.tokens[p.pos].Literal == "then") {
@@ -1658,15 +1659,15 @@ func (p *RubyParser) parseWhen() *Node {
 	if p.pos < len(p.tokens) && p.tokens[p.pos].Literal == "then" {
 		p.pos++
 	}
-	
+
 	// Parse body until when, else, or end
 	for p.pos < len(p.tokens) && p.tokens[p.pos].Type != TokenEOF {
 		p.skipWhitespaceAndNewlines()
-		
+
 		if p.pos >= len(p.tokens) {
 			break
 		}
-		
+
 		if p.tokens[p.pos].Type == TokenKeyword {
 			switch p.tokens[p.pos].Literal {
 			case "when", "else", "end":
@@ -1677,19 +1678,19 @@ func (p *RubyParser) parseWhen() *Node {
 				return whenNode
 			}
 		}
-		
+
 		node := p.parseStatement()
 		if node != nil {
 			node.Parent = whenNode
 			whenNode.Children = append(whenNode.Children, node)
 		}
 	}
-	
+
 	if len(whenNode.Children) > 0 {
 		lastChild := whenNode.Children[len(whenNode.Children)-1]
 		whenNode.Range.End = Position{Line: lastChild.Range.End.Line + 1, Character: 0}
 	}
-	
+
 	return whenNode
 }
 
@@ -1699,7 +1700,7 @@ func (p *RubyParser) parseRescue() *Node {
 	startLine := startTok.Line
 	startCol := startTok.Column
 	p.pos++ // consume 'rescue'
-	
+
 	rescueNode := &Node{
 		Type: NodeRescue,
 		Range: Range{
@@ -1707,7 +1708,7 @@ func (p *RubyParser) parseRescue() *Node {
 			End:   Position{Line: startLine, Character: startCol + 6},
 		},
 	}
-	
+
 	// Skip exception class and variable
 	for p.pos < len(p.tokens) && p.tokens[p.pos].Type != TokenNewline && p.tokens[p.pos].Type != TokenEOF &&
 		!(p.tokens[p.pos].Type == TokenKeyword && p.tokens[p.pos].Literal == "then") {
@@ -1716,15 +1717,15 @@ func (p *RubyParser) parseRescue() *Node {
 	if p.pos < len(p.tokens) && p.tokens[p.pos].Literal == "then" {
 		p.pos++
 	}
-	
+
 	// Parse body until rescue, else, ensure, or end
 	for p.pos < len(p.tokens) && p.tokens[p.pos].Type != TokenEOF {
 		p.skipWhitespaceAndNewlines()
-		
+
 		if p.pos >= len(p.tokens) {
 			break
 		}
-		
+
 		if p.tokens[p.pos].Type == TokenKeyword {
 			switch p.tokens[p.pos].Literal {
 			case "rescue", "else", "ensure", "end":
@@ -1735,19 +1736,19 @@ func (p *RubyParser) parseRescue() *Node {
 				return rescueNode
 			}
 		}
-		
+
 		node := p.parseStatement()
 		if node != nil {
 			node.Parent = rescueNode
 			rescueNode.Children = append(rescueNode.Children, node)
 		}
 	}
-	
+
 	if len(rescueNode.Children) > 0 {
 		lastChild := rescueNode.Children[len(rescueNode.Children)-1]
 		rescueNode.Range.End = Position{Line: lastChild.Range.End.Line + 1, Character: 0}
 	}
-	
+
 	return rescueNode
 }
 
@@ -1757,7 +1758,7 @@ func (p *RubyParser) parseEnsure() *Node {
 	startLine := startTok.Line
 	startCol := startTok.Column
 	p.pos++ // consume 'ensure'
-	
+
 	ensureNode := &Node{
 		Type: NodeEnsure,
 		Range: Range{
@@ -1765,15 +1766,15 @@ func (p *RubyParser) parseEnsure() *Node {
 			End:   Position{Line: startLine, Character: startCol + 6},
 		},
 	}
-	
+
 	// Parse body until end
 	for p.pos < len(p.tokens) && p.tokens[p.pos].Type != TokenEOF {
 		p.skipWhitespaceAndNewlines()
-		
+
 		if p.pos >= len(p.tokens) {
 			break
 		}
-		
+
 		if p.tokens[p.pos].Type == TokenKeyword && p.tokens[p.pos].Literal == "end" {
 			if len(ensureNode.Children) > 0 {
 				lastChild := ensureNode.Children[len(ensureNode.Children)-1]
@@ -1781,19 +1782,19 @@ func (p *RubyParser) parseEnsure() *Node {
 			}
 			return ensureNode
 		}
-		
+
 		node := p.parseStatement()
 		if node != nil {
 			node.Parent = ensureNode
 			ensureNode.Children = append(ensureNode.Children, node)
 		}
 	}
-	
+
 	if len(ensureNode.Children) > 0 {
 		lastChild := ensureNode.Children[len(ensureNode.Children)-1]
 		ensureNode.Range.End = Position{Line: lastChild.Range.End.Line + 1, Character: 0}
 	}
-	
+
 	return ensureNode
 }
 
@@ -1882,28 +1883,28 @@ func GetNodeAtPosition(node *Node, pos Position) *Node {
 	if !node.Range.Contains(pos) {
 		return nil
 	}
-	
+
 	for _, child := range node.Children {
 		if found := GetNodeAtPosition(child, pos); found != nil {
 			return found
 		}
 	}
-	
+
 	return node
 }
 
 // FindNodesByType finds all nodes of a given type in the AST
 func FindNodesByType(node *Node, nodeType NodeType) []*Node {
 	var results []*Node
-	
+
 	if node.Type == nodeType {
 		results = append(results, node)
 	}
-	
+
 	for _, child := range node.Children {
 		results = append(results, FindNodesByType(child, nodeType)...)
 	}
-	
+
 	return results
 }
 

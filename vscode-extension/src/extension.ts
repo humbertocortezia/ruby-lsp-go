@@ -59,7 +59,9 @@ export async function activate(context: ExtensionContext) {
       { scheme: "file", language: "rbs" },
     ],
     synchronize: {
-      fileEvents: workspace.createFileSystemWatcher("**/*.rb"),
+      // Git checkouts and other external edits do not emit didSave. The
+      // watched-file notification lets the server incrementally reindex them.
+      fileEvents: workspace.createFileSystemWatcher("**/*.{rb,erb,rbs}"),
     },
     outputChannel: outputChannel,
     initializationOptions: {
@@ -96,6 +98,10 @@ export async function activate(context: ExtensionContext) {
       await client.stop();
       await client.start();
       window.showInformationMessage("Ruby LSP Go restarted");
+    }),
+    commands.registerCommand("rubyLspGo.reindexWorkspace", async () => {
+      await client.sendRequest("rubyLspGo/reindexWorkspace");
+      window.showInformationMessage("Ruby LSP Go workspace reindex started");
     })
   );
 
@@ -135,12 +141,19 @@ function getRubyLspGoPath(): string | undefined {
     outputChannel.appendLine(`Configured path not found: ${resolved}`);
   }
 
-  // 2. Bundled binary inside the extension's bin/ folder
+  // 2. Bundled binary for this platform inside the extension's bin/ folder.
   const extensionDir = path.resolve(__dirname, "..");
-  const bundledPath = path.join(extensionDir, "bin", "ruby-lsp-go");
-  if (fs.existsSync(bundledPath)) {
-    outputChannel.appendLine(`Using bundled ruby-lsp-go: ${bundledPath}`);
-    return bundledPath;
+  const executableName = process.platform === "win32" ? "ruby-lsp-go.exe" : "ruby-lsp-go";
+  const bundledPaths = [
+    path.join(extensionDir, "bin", `${process.platform}-${process.arch}`, executableName),
+    // Compatibility with packages produced before platform-specific binaries.
+    path.join(extensionDir, "bin", executableName),
+  ];
+  for (const bundledPath of bundledPaths) {
+    if (isRunnableFile(bundledPath)) {
+      outputChannel.appendLine(`Using bundled ruby-lsp-go: ${bundledPath}`);
+      return bundledPath;
+    }
   }
 
   // 3. Fall back to system PATH
@@ -152,6 +165,21 @@ function getRubyLspGoPath(): string | undefined {
 
   outputChannel.appendLine("Could not find ruby-lsp-go in PATH or bundled with the extension");
   return undefined;
+}
+
+function isRunnableFile(filePath: string): boolean {
+  try {
+    const stats = fs.statSync(filePath);
+    if (!stats.isFile()) {
+      return false;
+    }
+    if (process.platform !== "win32") {
+      fs.accessSync(filePath, fs.constants.X_OK);
+    }
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // findInPath searches the PATH environment variable for an executable,
@@ -209,4 +237,3 @@ function getEnabledFeatures(): Record<string, boolean> {
 
   return { ...defaults, ...enabledFeatures };
 }
-

@@ -48,9 +48,37 @@ func Definition(ctx *Context, params interface{}) interface{} {
 	currentFilePath := uriToPath(uri)
 
 	if ctx.Index != nil {
+		// Local variables are lexical and must win over workspace symbols with
+		// the same name (for example, `print_val` versus a method).
+		if local, ok := indexer.FindLocalVariableDefinition(doc.Source(), pos.Line, cleanWord); ok {
+			local.FilePath = currentFilePath
+			return []interface{}{symbolEntryToLocation(local)}
+		}
+
+		// Resolve constant receivers before doing a global name lookup. This
+		// prevents MyClass.new from jumping to Object#new.
+		hasReceiver := false
+		if receiver, ok := indexer.GetReceiverAtPosition(doc.Source(), pos.Line, pos.Character); ok {
+			methodName := cleanWord
+			if methodName == "new" {
+				methodName = "initialize"
+			}
+			entries := ctx.Index.LookupMethod(receiver, methodName)
+			hasReceiver = true
+			for _, entry := range entries {
+				locations = append(locations, symbolEntryToLocation(entry))
+			}
+		}
+		if hasReceiver && len(locations) > 0 {
+			return locations
+		}
+
 		// Try the symbol as-is, then capitalized form (handles
 		// snake_case identifiers clicked on PascalCase classes).
-		entries := ctx.Index.LookupLegacy(cleanWord)
+		entries := []indexer.SymbolEntry{}
+		if !hasReceiver {
+			entries = ctx.Index.LookupLegacy(cleanWord)
+		}
 		if len(entries) == 0 && !isCapitalized(cleanWord) {
 			entries = ctx.Index.LookupLegacy(capitalize(cleanWord))
 		}
@@ -402,9 +430,9 @@ func WorkspaceSymbol(ctx *Context, params interface{}) interface{} {
 			}
 		}
 		symbols = append(symbols, map[string]interface{}{
-			"name": entry.FullyQualifiedName,
-			"kind": indexer.SymbolKindToLSP(entry.Type),
-			"location": symbolEntryToLocation(entry),
+			"name":          entry.FullyQualifiedName,
+			"kind":          indexer.SymbolKindToLSP(entry.Type),
+			"location":      symbolEntryToLocation(entry),
 			"containerName": relPath,
 		})
 		if len(symbols) >= 50 {

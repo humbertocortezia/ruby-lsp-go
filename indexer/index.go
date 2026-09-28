@@ -13,15 +13,15 @@ import (
 
 // IndexStore is the AST-based workspace symbol index.
 type IndexStore struct {
-	entries      map[string][]Entry
-	uriToEntries map[string][]Entry
-	prefixTree   *PrefixTree
-	ancestors    map[string][]string
-	mixins       map[string][]MixinEntry
-	mutex        sync.RWMutex
+	entries       map[string][]Entry
+	uriToEntries  map[string][]Entry
+	prefixTree    *PrefixTree
+	ancestors     map[string][]string
+	mixins        map[string][]MixinEntry
+	mutex         sync.RWMutex
 	workspaceRoot string
-	logger       *log.Logger
-	ready        bool
+	logger        *log.Logger
+	ready         bool
 }
 
 // NewIndexStore creates a new AST-based index.
@@ -79,6 +79,20 @@ func (idx *IndexStore) BuildIndex() {
 	idx.ready = true
 	idx.mutex.Unlock()
 	idx.logger.Printf("AST indexing complete: %d files, %d symbols", fileCount, symbolCount)
+}
+
+// Rebuild clears the current symbol state and indexes the workspace again.
+// It is used after external changes such as a Git branch switch.
+func (idx *IndexStore) Rebuild() {
+	idx.mutex.Lock()
+	idx.entries = make(map[string][]Entry)
+	idx.uriToEntries = make(map[string][]Entry)
+	idx.prefixTree = NewPrefixTree()
+	idx.ancestors = make(map[string][]string)
+	idx.mixins = make(map[string][]MixinEntry)
+	idx.ready = false
+	idx.mutex.Unlock()
+	idx.BuildIndex()
 }
 
 // IndexFile parses and indexes a single file.
@@ -203,6 +217,35 @@ func (idx *IndexStore) LookupLegacy(name string) []SymbolEntry {
 	result := make([]SymbolEntry, len(entries))
 	for i, e := range entries {
 		result[i] = EntryToSymbolEntry(e)
+	}
+	return result
+}
+
+// LookupMethod returns methods declared on a receiver, using the receiver's
+// fully-qualified name when available and falling back to its short name.
+func (idx *IndexStore) LookupMethod(receiver, method string) []SymbolEntry {
+	idx.mutex.RLock()
+	defer idx.mutex.RUnlock()
+
+	var result []SymbolEntry
+	seen := make(map[string]bool)
+	for _, entries := range idx.entries {
+		for _, raw := range entries {
+			entry, ok := raw.(MethodEntry)
+			if !ok || entry.Name != method {
+				continue
+			}
+			owner := entry.Owner
+			if owner != receiver && shortName(owner) != shortName(receiver) {
+				continue
+			}
+			converted := EntryToSymbolEntry(entry)
+			key := converted.FilePath + ":" + converted.FullyQualifiedName
+			if !seen[key] {
+				seen[key] = true
+				result = append(result, converted)
+			}
+		}
 	}
 	return result
 }

@@ -15,7 +15,7 @@ import (
 // older AST producers.
 func entryLine(node *parser.Node) int {
 	if node.NamePosition.Line > 0 {
-		return node.NamePosition.Line - 1
+		return node.NamePosition.Line
 	}
 	return node.Range.Start.Line
 }
@@ -84,8 +84,18 @@ func (v *DeclarationVisitor) walk(node *parser.Node) {
 	switch node.Type {
 	case parser.NodeClass:
 		v.visitClass(node)
+		for _, child := range node.Children {
+			v.walk(child)
+		}
+		v.nesting = v.nesting[:len(v.nesting)-1]
+		return
 	case parser.NodeModule:
 		v.visitModule(node)
+		for _, child := range node.Children {
+			v.walk(child)
+		}
+		v.nesting = v.nesting[:len(v.nesting)-1]
+		return
 	case parser.NodeMethod:
 		v.visitMethod(node, false)
 	case parser.NodeSingletonMethod:
@@ -140,7 +150,6 @@ func (v *DeclarationVisitor) visitClass(node *parser.Node) {
 	}
 	v.Entries = append(v.Entries, entry)
 	v.nesting = append(v.nesting, shortName(name))
-	defer func() { v.nesting = v.nesting[:len(v.nesting)-1] }()
 }
 
 func (v *DeclarationVisitor) visitModule(node *parser.Node) {
@@ -166,7 +175,6 @@ func (v *DeclarationVisitor) visitModule(node *parser.Node) {
 	}
 	v.Entries = append(v.Entries, entry)
 	v.nesting = append(v.nesting, shortName(name))
-	defer func() { v.nesting = v.nesting[:len(v.nesting)-1] }()
 }
 
 func (v *DeclarationVisitor) visitMethod(node *parser.Node, singleton bool) {

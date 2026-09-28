@@ -1,6 +1,6 @@
 # Ruby LSP Go — Documentação Técnica Completa
 
-> Versão: 2.0.1 | Última atualização: Maio 2026
+> Versão: 1.3.0 | Última atualização: Setembro 2026
 
 ## Sumário
 

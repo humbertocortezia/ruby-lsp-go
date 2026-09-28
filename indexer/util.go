@@ -91,6 +91,8 @@ func SymbolKindToLSP(t SymbolType) int {
 		return lspTypes.SymbolConstant
 	case SymbolScope, SymbolAssociation, SymbolAttrAccessor:
 		return lspTypes.SymbolProperty
+	case SymbolLocalVariable:
+		return lspTypes.SymbolVariable
 	default:
 		return lspTypes.SymbolFile
 	}
@@ -114,6 +116,8 @@ func CompletionKindFromType(t SymbolType) int {
 		return lspTypes.CompletionField
 	case SymbolAttrAccessor:
 		return lspTypes.CompletionProperty
+	case SymbolLocalVariable:
+		return lspTypes.CompletionVariable
 	default:
 		return lspTypes.CompletionText
 	}
@@ -139,6 +143,8 @@ func SymbolTypeString(t SymbolType) string {
 		return "association"
 	case SymbolAttrAccessor:
 		return "attribute"
+	case SymbolLocalVariable:
+		return "local variable"
 	default:
 		return "symbol"
 	}

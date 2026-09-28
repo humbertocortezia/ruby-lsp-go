@@ -100,8 +100,8 @@ type FoldingRange struct {
 
 // SelectionRange for smart selection.
 type SelectionRange struct {
-	Range  Range             `json:"range"`
-	Parent *SelectionRange   `json:"parent,omitempty"`
+	Range  Range           `json:"range"`
+	Parent *SelectionRange `json:"parent,omitempty"`
 }
 
 // DocumentHighlight for occurrence highlighting.
@@ -142,8 +142,8 @@ type SignatureHelp struct {
 
 // SignatureInformation describes a method signature.
 type SignatureInformation struct {
-	Label         string              `json:"label"`
-	Documentation interface{}         `json:"documentation,omitempty"`
+	Label         string                 `json:"label"`
+	Documentation interface{}            `json:"documentation,omitempty"`
 	Parameters    []ParameterInformation `json:"parameters,omitempty"`
 }
 
@@ -155,11 +155,11 @@ type ParameterInformation struct {
 
 // InlayHint for inline hints.
 type InlayHint struct {
-	Position   Position    `json:"position"`
-	Label      interface{} `json:"label"`
-	Kind       int         `json:"kind,omitempty"`
-	PaddingLeft  bool      `json:"paddingLeft,omitempty"`
-	PaddingRight bool      `json:"paddingRight,omitempty"`
+	Position     Position    `json:"position"`
+	Label        interface{} `json:"label"`
+	Kind         int         `json:"kind,omitempty"`
+	PaddingLeft  bool        `json:"paddingLeft,omitempty"`
+	PaddingRight bool        `json:"paddingRight,omitempty"`
 }
 
 // CodeLens for test run buttons.
@@ -171,9 +171,9 @@ type CodeLens struct {
 
 // CodeAction for quick fixes.
 type CodeAction struct {
-	Title       string      `json:"title"`
-	Kind        string      `json:"kind,omitempty"`
-	Diagnostics []Diagnostic `json:"diagnostics,omitempty"`
+	Title       string         `json:"title"`
+	Kind        string         `json:"kind,omitempty"`
+	Diagnostics []Diagnostic   `json:"diagnostics,omitempty"`
 	Edit        *WorkspaceEdit `json:"edit,omitempty"`
 }
 
@@ -184,8 +184,8 @@ type WorkspaceEdit struct {
 
 // DocumentLink for require paths.
 type DocumentLink struct {
-	Range  Range  `json:"range"`
-	Target string `json:"target,omitempty"`
+	Range   Range  `json:"range"`
+	Target  string `json:"target,omitempty"`
 	Tooltip string `json:"tooltip,omitempty"`
 }
 
@@ -233,18 +233,19 @@ const (
 type SymbolType int
 
 const (
-	IndexerSymbolNamespace       SymbolType = iota // 0
-	IndexerSymbolClass                             // 1
-	IndexerSymbolModule                            // 2
-	IndexerSymbolMethod                            // 3
-	IndexerSymbolSingletonMethod                   // 4
-	IndexerSymbolClassVariable                     // 5
-	IndexerSymbolAttrAccessor                      // 6
-	IndexerSymbolConstant                          // 7
-	IndexerSymbolInstanceVariable                  // 8
-	IndexerSymbolGlobalVariable                    // 9
-	IndexerSymbolScope                             // 10
-	IndexerSymbolAssociation                       // 11
+	IndexerSymbolNamespace        SymbolType = iota // 0
+	IndexerSymbolClass                              // 1
+	IndexerSymbolModule                             // 2
+	IndexerSymbolMethod                             // 3
+	IndexerSymbolSingletonMethod                    // 4
+	IndexerSymbolClassVariable                      // 5
+	IndexerSymbolAttrAccessor                       // 6
+	IndexerSymbolConstant                           // 7
+	IndexerSymbolInstanceVariable                   // 8
+	IndexerSymbolGlobalVariable                     // 9
+	IndexerSymbolScope                              // 10
+	IndexerSymbolAssociation                        // 11
+	IndexerSymbolLocalVariable                      // 12
 )
 
 // SymbolEntry is a flat, serializable representation of an indexed Ruby

@@ -4,6 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/url"
+	"path/filepath"
+	"runtime"
+	"strings"
 	"sync"
 
 	"github.com/humberto/ruby-lsp-go/documents"
@@ -139,6 +143,8 @@ func (s *Server) processMessage(msg Message) {
 		s.SendResponse(msg.ID, handlers.TypeHierarchySupertypes(ctx, msg.Params))
 	case "workspace/symbol":
 		s.SendResponse(msg.ID, handlers.WorkspaceSymbol(ctx, msg.Params))
+	case "rubyLspGo/reindexWorkspace":
+		s.SendResponse(msg.ID, s.ReindexWorkspace())
 	default:
 		s.Logger.Printf("Unhandled method: %s", msg.Method)
 	}
@@ -176,7 +182,7 @@ func (s *Server) HandleInitialize(params interface{}) interface{} {
 		"capabilities": buildCapabilities(),
 		"serverInfo": map[string]string{
 			"name":    "Ruby LSP Go",
-			"version": "2.0.0",
+			"version": "1.3.0",
 		},
 	}
 }
@@ -191,12 +197,12 @@ func buildCapabilities() map[string]interface{} {
 		"completionProvider": map[string]interface{}{
 			"triggerCharacters": []string{".", ":", "@", "#", "$"},
 		},
-		"hoverProvider":                    true,
-		"definitionProvider":               true,
-		"documentSymbolProvider":           true,
-		"workspaceSymbolProvider":          true,
-		"documentFormattingProvider":       true,
-		"documentRangeFormattingProvider":    true,
+		"hoverProvider":                   true,
+		"definitionProvider":              true,
+		"documentSymbolProvider":          true,
+		"workspaceSymbolProvider":         true,
+		"documentFormattingProvider":      true,
+		"documentRangeFormattingProvider": true,
 		"documentOnTypeFormattingProvider": map[string]interface{}{
 			"firstTriggerCharacter": "\n",
 			"moreTriggerCharacter":  []string{"d"},
@@ -245,6 +251,9 @@ func buildCapabilities() map[string]interface{} {
 			"workspaceDiagnostics":  false,
 		},
 		"typeHierarchyProvider": true,
+		"executeCommandProvider": map[string]interface{}{
+			"commands": []string{"rubyLspGo.reindexWorkspace"},
+		},
 	}
 }
 
@@ -310,6 +319,71 @@ func (s *Server) HandleDidSave(params interface{}) {
 			}
 		}
 	}
+}
+
+// HandleWatchedFiles applies changes reported by the editor's filesystem
+// watcher. This covers external edits such as Git branch switches, which do
+// not produce textDocument/didSave notifications.
+func (s *Server) HandleWatchedFiles(params interface{}) {
+	if s.Index == nil {
+		return
+	}
+	paramMap, ok := params.(map[string]interface{})
+	if !ok {
+		return
+	}
+	changes, ok := paramMap["changes"].([]interface{})
+	if !ok {
+		return
+	}
+	for _, raw := range changes {
+		change, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		uri, _ := change["uri"].(string)
+		filePath := uriToPath(uri)
+		if !isSupportedSource(filePath) || !s.isInWorkspace(filePath) {
+			continue
+		}
+		kind, _ := change["type"].(float64)
+		if int(kind) == 3 { // FileDelete
+			s.Index.DeleteFile(filePath)
+			continue
+		}
+		go s.Index.UpdateFile(filePath)
+	}
+}
+
+// ReindexWorkspace starts a complete workspace rebuild and returns an
+// immediate acknowledgement to the extension command.
+func (s *Server) ReindexWorkspace() interface{} {
+	if s.Index == nil {
+		return map[string]interface{}{"started": false, "error": "workspace index is not initialized"}
+	}
+	go s.Index.Rebuild()
+	return map[string]interface{}{"started": true}
+}
+
+func (s *Server) isInWorkspace(filePath string) bool {
+	if s.State == nil || s.State.WorkspacePath == "" {
+		return true
+	}
+	root, err := filepath.Abs(s.State.WorkspacePath)
+	if err != nil {
+		return false
+	}
+	path, err := filepath.Abs(filePath)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(root, path)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+func isSupportedSource(filePath string) bool {
+	ext := strings.ToLower(filepath.Ext(filePath))
+	return ext == ".rb" || ext == ".erb" || ext == ".rbs"
 }
 
 // HandleCancelRequest handles $/cancelRequest.
@@ -416,8 +490,19 @@ func parseRange(rangeMap map[string]interface{}) *documents.Range {
 }
 
 func uriToPath(uri string) string {
-	if len(uri) > 7 && uri[:7] == "file://" {
-		return uri[7:]
+	if strings.HasPrefix(uri, "file://") {
+		parsed, err := url.Parse(uri)
+		if err == nil {
+			path := parsed.Path
+			if runtime.GOOS == "windows" && strings.HasPrefix(path, "/") && len(path) > 2 && path[2] == ':' {
+				path = path[1:]
+			}
+			if decoded, err := url.PathUnescape(path); err == nil {
+				return filepath.FromSlash(decoded)
+			}
+			return filepath.FromSlash(path)
+		}
+		return strings.TrimPrefix(uri, "file://")
 	}
 	return uri
 }
