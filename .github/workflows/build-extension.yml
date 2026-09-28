@@ -1,0 +1,50 @@
+name: Build Ruby LSP Go extension
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: vscode-extension/package-lock.json
+
+      - name: Build and package extension
+        working-directory: vscode-extension
+        run: ./build.sh
+
+      - name: Upload extension and server artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ruby-lsp-go-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            vscode-extension/vscode-ruby-lsp-go.vsix
+            vscode-extension/bin/darwin-x64/ruby-lsp-go
+            vscode-extension/bin/darwin-arm64/ruby-lsp-go
+            vscode-extension/bin/linux-x64/ruby-lsp-go
+            vscode-extension/bin/linux-arm64/ruby-lsp-go
+            vscode-extension/bin/win32-x64/ruby-lsp-go.exe
+            vscode-extension/bin/win32-arm64/ruby-lsp-go.exe
