@@ -3,6 +3,7 @@ package handlers
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -83,7 +84,7 @@ func extractRubyForDiagnostics(doc documents.Document) string {
 
 type ruboCopOutput struct {
 	Files []struct {
-		Path   string `json:"path"`
+		Path     string `json:"path"`
 		Offenses []struct {
 			Severity string `json:"severity"`
 			Message  string `json:"message"`
@@ -157,6 +158,11 @@ func runRuboCop(source, filePath string) []interface{} {
 func syntaxDiagnostics(source string) []interface{} {
 	_, err := parser.ParseSource(source)
 	if err != nil {
+		message := fmt.Sprintf("Syntax error: %v", err)
+		var failure *parser.PanicError
+		if errors.As(err, &failure) {
+			message = err.Error()
+		}
 		return []interface{}{
 			map[string]interface{}{
 				"range": map[string]interface{}{
@@ -165,7 +171,7 @@ func syntaxDiagnostics(source string) []interface{} {
 				},
 				"severity": 1,
 				"source":   "ruby-lsp-go",
-				"message":  fmt.Sprintf("Syntax error: %v", err),
+				"message":  message,
 			},
 		}
 	}

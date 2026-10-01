@@ -28,6 +28,7 @@ func NewERBDocument(uri, source string, version int, languageID string) *ERBDocu
 func (d *ERBDocument) parseERB() {
 	rubySource := d.scanner.RubyContent()
 	result, err := parser.ParseSource(rubySource)
+	d.parseResult = nil
 	if err == nil {
 		d.parseResult = result
 	}

@@ -185,7 +185,49 @@ app/jobs/user_job.rb
 
 ### Parser `parser/ruby_parser.go`
 
-O parser AST é um componente **adicional** para features avançadas como folding ranges, selection ranges e document highlights. Ele **não** é usado para indexação em produção.
+O parser AST é usado na indexação e em recursos como folding ranges, selection ranges e document highlights.
+
+#### Código incompleto e isolamento de falhas
+
+`Parse` e `ParseSource` retornam `IncompleteLiteralError`, sem AST ou
+`ParseResult`, quando uma string, regex ou símbolo entre aspas reconhecido pelo
+tokenizer chega ao EOF sem fechamento. Uma barra invertida no EOF ou um
+delimitador final escapado não fecha o literal. Tokens incompletos não chegam
+aos consumidores do AST; literais fechados mantêm seu conteúdo integral.
+
+`Parse` recupera panics inesperados na própria goroutine e retorna `PanicError`.
+O indexador também protege a preparação de cada arquivo, incluindo extração ERB
+e visita ao AST. Uma falha registra caminho, tipo do erro e, para panics, stack;
+o valor do panic e o conteúdo do arquivo não são registrados. O workspace
+continua com os próximos arquivos. `IsReady` indica que a varredura terminou,
+mesmo se alguns arquivos foram rejeitados.
+
+Na atualização de um arquivo, a substituição das entradas ocorre sob o mutex
+do índice. Se a leitura ou o parsing falhar, as entradas antigas são removidas
+das consultas e da busca por prefixo. Nenhum símbolo parcial desse arquivo é
+publicado. Documentos Ruby/ERB descartam o AST anterior ao receber erro, e o
+fallback de diagnósticos informa a falha. Uma edição válida posterior permite
+indexar e analisar o arquivo novamente.
+
+O parser continua sendo uma aproximação permissiva de Ruby, sem validação
+completa de heredocs, `%q/%Q`, interpolação ou da ambiguidade entre divisão e
+regex. Um `/` isolado continua sendo tratado como operador. O fuzzing inclui
+essas construções para verificar robustez, sem prometer AST completo para elas.
+`recover` não intercepta erros fatais do runtime, como esgotamento de memória
+ou stack, nem interrompe loops; o teste de fuzz tem timeout por entrada.
+
+Regressões são executadas antes do empacotamento no CI:
+
+```sh
+go test ./...
+go test -race ./...
+go test ./parser -run='^$' -fuzz=FuzzParseSource -fuzztime=10s -parallel=2 -timeout=60s
+```
+
+O teste em subprocesso executa o `main` real por stdio, inclusive com
+instrumentação de race, e aguarda eventos de conclusão com timeout. Ele cobre
+inicialização, `workspace/didChangeWatchedFiles`, `rubyLspGo/reindexWorkspace`,
+diagnósticos, consultas posteriores a `workspace/symbol` e encerramento normal.
 
 #### Tipos de Nós
 

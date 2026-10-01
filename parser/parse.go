@@ -10,13 +10,10 @@ type ParseResult struct {
 	AST    *Node
 }
 
-// Parse parses Ruby source and returns a simplified AST.
-//
-// This implementation is pure Go: it does not depend on tree-sitter, Prism,
-// or cgo. It is intentionally permissive — it never returns an error for
-// valid Ruby that hits a known edge case. Callers that need a real syntax
-// check should run a separate Ruby tool (e.g. `ruby -c`) and feed the
-// diagnostics back through the LSP `textDocument/diagnostic` channel.
+// ParseSource parses Ruby source with the same panic boundary as Parse.
+// Unterminated strings, quoted symbols and regexes return an error and no AST.
+// Other syntax remains permissive: this simplified parser is not a complete
+// Ruby syntax validator. Use a Ruby tool for comprehensive syntax diagnostics.
 func ParseSource(source string) (*ParseResult, error) {
 	ast, err := Parse(source)
 	if err != nil {

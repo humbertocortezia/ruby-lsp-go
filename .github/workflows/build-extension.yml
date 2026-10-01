@@ -23,6 +23,15 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Test
+        run: go test ./...
+
+      - name: Test with race detector
+        run: go test -race ./...
+
+      - name: Fuzz parser
+        run: go test ./parser -run='^$' -fuzz=FuzzParseSource -fuzztime=10s -parallel=2 -timeout=60s
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:

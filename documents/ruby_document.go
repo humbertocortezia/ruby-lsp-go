@@ -33,15 +33,16 @@ func New(uri, source string, version int, languageID string) *RubyDocument {
 	return NewRubyDocument(uri, source, version, languageID)
 }
 
-func (d *RubyDocument) URI() string        { return d.uri }
-func (d *RubyDocument) Source() string     { return d.source }
-func (d *RubyDocument) Version() int       { return d.version }
-func (d *RubyDocument) LanguageID() string { return d.languageID }
+func (d *RubyDocument) URI() string                      { return d.uri }
+func (d *RubyDocument) Source() string                   { return d.source }
+func (d *RubyDocument) Version() int                     { return d.version }
+func (d *RubyDocument) LanguageID() string               { return d.languageID }
 func (d *RubyDocument) ParseResult() *parser.ParseResult { return d.parseResult }
-func (d *RubyDocument) ShouldDelegate(_, _ int) bool { return false }
+func (d *RubyDocument) ShouldDelegate(_, _ int) bool     { return false }
 
 func (d *RubyDocument) parse() {
 	result, err := parser.ParseSource(d.source)
+	d.parseResult = nil
 	if err == nil {
 		d.parseResult = result
 	}
