@@ -1,6 +1,7 @@
 package indexer
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -22,6 +23,8 @@ type IndexStore struct {
 	workspaceRoot string
 	logger        *log.Logger
 	ready         bool
+	// Set once at construction; tests can inject a parser before indexing starts.
+	parseSource func(string) (*parser.ParseResult, error)
 }
 
 // NewIndexStore creates a new AST-based index.
@@ -34,6 +37,7 @@ func NewIndexStore(workspaceRoot string, logger *log.Logger) *IndexStore {
 		mixins:        make(map[string][]MixinEntry),
 		workspaceRoot: workspaceRoot,
 		logger:        logger,
+		parseSource:   parser.ParseSource,
 	}
 }
 
@@ -95,19 +99,37 @@ func (idx *IndexStore) Rebuild() {
 	idx.BuildIndex()
 }
 
-// IndexFile parses and indexes a single file.
+// IndexFile parses and replaces a file's entries. On failure the old entries
+// are removed, so queries never use symbols from an outdated source version.
 func (idx *IndexStore) IndexFile(filePath, source string) []Entry {
-	entries := idx.parseFileOnly(filePath, source)
-	if len(entries) > 0 {
-		idx.addEntries(filePath, entries)
+	entries, err := idx.indexFile(filePath, source)
+	if err != nil {
+		idx.logParseFailure(filePath, err)
 	}
 	return entries
 }
 
-func (idx *IndexStore) addEntries(filePath string, entries []Entry) {
+func (idx *IndexStore) indexFile(filePath, source string) ([]Entry, error) {
+	entries, err := idx.parseFileOnly(filePath, source)
 	idx.mutex.Lock()
 	defer idx.mutex.Unlock()
+	idx.deleteFileLocked(filePath)
+	if err != nil {
+		return nil, err
+	}
+	idx.addEntriesLocked(filePath, entries)
+	return entries, nil
+}
 
+func (idx *IndexStore) logParseFailure(filePath string, err error) {
+	idx.logger.Printf("Failed to index %s: %v", filePath, err)
+	var failure *parser.PanicError
+	if errors.As(err, &failure) {
+		idx.logger.Printf("Parsing stack for %s:\n%s", filePath, failure.Stack)
+	}
+}
+
+func (idx *IndexStore) addEntriesLocked(filePath string, entries []Entry) {
 	idx.uriToEntries[filePath] = entries
 	for _, e := range entries {
 		idx.entries[e.GetName()] = append(idx.entries[e.GetName()], e)
@@ -136,7 +158,10 @@ func (idx *IndexStore) addEntries(filePath string, entries []Entry) {
 func (idx *IndexStore) DeleteFile(filePath string) {
 	idx.mutex.Lock()
 	defer idx.mutex.Unlock()
+	idx.deleteFileLocked(filePath)
+}
 
+func (idx *IndexStore) deleteFileLocked(filePath string) {
 	oldEntries, ok := idx.uriToEntries[filePath]
 	if !ok {
 		return
@@ -160,7 +185,9 @@ func (idx *IndexStore) removeFromMap(m map[string][]Entry, key, filePath string)
 	if !ok {
 		return
 	}
-	filtered := entries[:0]
+	// Lookup/AllEntries readers may still hold the previous slice after their
+	// read lock is released. Do not overwrite that snapshot while replacing it.
+	filtered := make([]Entry, 0, len(entries))
 	for _, e := range entries {
 		if e.GetLocation().URI != fileURI(filePath) && filePathFromURI(e.GetLocation().URI) != filePath {
 			filtered = append(filtered, e)
@@ -175,8 +202,10 @@ func (idx *IndexStore) removeFromMap(m map[string][]Entry, key, filePath string)
 
 // UpdateFile re-indexes a file incrementally.
 func (idx *IndexStore) UpdateFile(filePath string) {
-	idx.DeleteFile(filePath)
-	idx.IndexFile(filePath, "")
+	if _, err := idx.indexFile(filePath, ""); err != nil {
+		idx.logParseFailure(filePath, err)
+		return
+	}
 	idx.logger.Printf("Re-indexed: %s", filePath)
 }
 
@@ -338,7 +367,11 @@ func (idx *IndexStore) WorkspaceRoot() string {
 
 // ParseFile parses a file and returns legacy SymbolEntry without modifying the index.
 func (idx *IndexStore) ParseFile(filePath string) []SymbolEntry {
-	entries := idx.parseFileOnly(filePath, "")
+	entries, err := idx.parseFileOnly(filePath, "")
+	if err != nil {
+		idx.logParseFailure(filePath, err)
+		return nil
+	}
 	result := make([]SymbolEntry, len(entries))
 	for i, e := range entries {
 		result[i] = EntryToSymbolEntry(e)
@@ -347,11 +380,14 @@ func (idx *IndexStore) ParseFile(filePath string) []SymbolEntry {
 }
 
 // parseFileOnly parses without adding to the index store.
-func (idx *IndexStore) parseFileOnly(filePath, source string) []Entry {
+func (idx *IndexStore) parseFileOnly(filePath, source string) (entries []Entry, err error) {
+	// This boundary includes ERB extraction and AST visitation, before publishing
+	// any entries. Recovery occurs in the worker that is parsing this file.
+	defer parser.Recover(&err)
 	if source == "" {
 		data, err := os.ReadFile(filePath)
 		if err != nil {
-			return nil
+			return nil, err
 		}
 		source = string(data)
 	}
@@ -361,13 +397,16 @@ func (idx *IndexStore) parseFileOnly(filePath, source string) []Entry {
 		source = scanner.RubyContent()
 	}
 
-	parseResult, err := parser.ParseSource(source)
-	if err != nil || parseResult.AST == nil {
-		return nil
+	parseResult, err := idx.parseSource(source)
+	if err != nil {
+		return nil, err
+	}
+	if parseResult == nil || parseResult.AST == nil {
+		return nil, fmt.Errorf("parser returned no AST")
 	}
 
 	visitor := NewDeclarationVisitor(filePath)
-	return visitor.Visit(parseResult.AST)
+	return visitor.Visit(parseResult.AST), nil
 }
 
 // GetAST returns nil (AST is parsed on demand in documents package).

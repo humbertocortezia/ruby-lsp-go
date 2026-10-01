@@ -19,22 +19,23 @@ type Document interface {
 
 // BaseDocument holds common document fields.
 type BaseDocument struct {
-	uri        string
-	source     string
-	version    int
-	languageID string
+	uri         string
+	source      string
+	version     int
+	languageID  string
 	parseResult *parser.ParseResult
 }
 
-func (d *BaseDocument) URI() string        { return d.uri }
-func (d *BaseDocument) Source() string     { return d.source }
-func (d *BaseDocument) Version() int       { return d.version }
-func (d *BaseDocument) LanguageID() string { return d.languageID }
+func (d *BaseDocument) URI() string                      { return d.uri }
+func (d *BaseDocument) Source() string                   { return d.source }
+func (d *BaseDocument) Version() int                     { return d.version }
+func (d *BaseDocument) LanguageID() string               { return d.languageID }
 func (d *BaseDocument) ParseResult() *parser.ParseResult { return d.parseResult }
 func (d *BaseDocument) ShouldDelegate(_ int, _ int) bool { return false }
 
 func (d *BaseDocument) parse() {
 	result, err := parser.ParseSource(d.source)
+	d.parseResult = nil
 	if err == nil {
 		d.parseResult = result
 	}

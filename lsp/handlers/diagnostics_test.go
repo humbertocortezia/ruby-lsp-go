@@ -1,11 +1,28 @@
 package handlers
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
+
+func TestSyntaxDiagnosticsIncompleteLiterals(t *testing.T) {
+	for _, source := range []string{`"`, `'abc`, `:"abc`, `:'abc`, `/abc\`, "\"abc\n"} {
+		diagnostics := syntaxDiagnostics(source)
+		if len(diagnostics) != 1 {
+			t.Fatalf("expected diagnostic for %q, got %v", source, diagnostics)
+		}
+		message := diagnostics[0].(map[string]interface{})["message"].(string)
+		if !strings.Contains(message, "unterminated") {
+			t.Fatalf("unexpected diagnostic: %s", message)
+		}
+	}
+}
 
 // The fixture mirrors the user's reported file:
 //   - 12 lines of leading `#` comments
 //   - one `class ... end` block
 //   - several `belongs_to` lines
+//
 // The previous heuristic counted `end` as a "close" but did not count
 // `class` as an "open", so it reported a false positive on every model.
 func TestCountUnbalancedBraces_NoFalsePositiveOnModel(t *testing.T) {

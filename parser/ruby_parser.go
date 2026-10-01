@@ -125,20 +125,27 @@ type RubyParser struct {
 }
 
 // Parse parses Ruby source code and returns an AST
-func Parse(source string) (*Node, error) {
+func Parse(source string) (ast *Node, err error) {
+	defer Recover(&err)
+	return parse(source)
+}
+
+func parse(source string) (*Node, error) {
 	parser := &RubyParser{
 		source: source,
 		lines:  strings.Split(source, "\n"),
 	}
 
-	parser.tokenize()
+	if err := parser.tokenize(); err != nil {
+		return nil, err
+	}
 	ast := parser.parse()
 
 	return ast, nil
 }
 
 // tokenize converts the source into tokens
-func (p *RubyParser) tokenize() {
+func (p *RubyParser) tokenize() error {
 	p.tokens = []Token{}
 	line := 0
 	column := 0
@@ -177,27 +184,11 @@ func (p *RubyParser) tokenize() {
 		}
 
 		if ch == '"' || ch == '\'' {
-			// String
-			quote := ch
-			start := i
-			i++
-			for i < len(p.source) {
-				if p.source[i] == '\\' && i+1 < len(p.source) {
-					i += 2
-					continue
-				}
-				if p.source[i] == quote {
-					break
-				}
-				i++
+			end, err := p.scanLiteral(i, i, TokenString, &line, &column)
+			if err != nil {
+				return err
 			}
-			p.tokens = append(p.tokens, Token{
-				Type:    TokenString,
-				Literal: p.source[start : i+1],
-				Line:    line,
-				Column:  column,
-			})
-			column += i - start + 1
+			i = end - 1 // the outer loop advances to the next byte
 			continue
 		}
 
@@ -214,25 +205,11 @@ func (p *RubyParser) tokenize() {
 			}
 
 			if isRegex {
-				start := i
-				i++
-				for i < len(p.source) {
-					if p.source[i] == '\\' && i+1 < len(p.source) {
-						i += 2
-						continue
-					}
-					if p.source[i] == '/' {
-						break
-					}
-					i++
+				end, err := p.scanLiteral(i, i, TokenRegex, &line, &column)
+				if err != nil {
+					return err
 				}
-				p.tokens = append(p.tokens, Token{
-					Type:    TokenRegex,
-					Literal: p.source[start : i+1],
-					Line:    line,
-					Column:  column,
-				})
-				column += i - start + 1
+				i = end - 1
 				continue
 			}
 		}
@@ -240,27 +217,11 @@ func (p *RubyParser) tokenize() {
 		if ch == ':' && i+1 < len(p.source) {
 			nextCh := p.source[i+1]
 			if nextCh == '\'' || nextCh == '"' {
-				// Symbol with quotes
-				quote := nextCh
-				start := i
-				i += 2
-				for i < len(p.source) {
-					if p.source[i] == '\\' && i+1 < len(p.source) {
-						i += 2
-						continue
-					}
-					if p.source[i] == quote {
-						break
-					}
-					i++
+				end, err := p.scanLiteral(i, i+1, TokenSymbol, &line, &column)
+				if err != nil {
+					return err
 				}
-				p.tokens = append(p.tokens, Token{
-					Type:    TokenSymbol,
-					Literal: p.source[start : i+1],
-					Line:    line,
-					Column:  column,
-				})
-				column += i - start + 1
+				i = end - 1
 				continue
 			} else if unicode.IsLetter(rune(nextCh)) || nextCh == '_' {
 				// Symbol literal
@@ -433,6 +394,46 @@ func (p *RubyParser) tokenize() {
 	}
 
 	p.tokens = append(p.tokens, Token{Type: TokenEOF, Literal: "", Line: line, Column: column})
+	return nil
+}
+
+// scanLiteral returns an exclusive end offset only after finding an unescaped
+// closing delimiter. Incomplete tokens are never passed to AST consumers.
+func (p *RubyParser) scanLiteral(start, opening int, kind TokenType, line, column *int) (int, error) {
+	delimiter := p.source[opening]
+	end := opening + 1
+	for end < len(p.source) {
+		ch := p.source[end]
+		end++
+		if ch == '\\' {
+			if end < len(p.source) {
+				end++
+			}
+			continue
+		}
+		if ch != delimiter {
+			continue
+		}
+		literal := p.source[start:end]
+		p.tokens = append(p.tokens, Token{Type: kind, Literal: literal, Line: *line, Column: *column})
+		for i := 0; i < len(literal); i++ {
+			if literal[i] == '\n' {
+				*line++
+				*column = 0
+			} else {
+				*column++
+			}
+		}
+		return end, nil
+	}
+	name := "string"
+	if kind == TokenRegex {
+		name = "regex"
+	}
+	if kind == TokenSymbol {
+		name = "quoted symbol"
+	}
+	return end, &IncompleteLiteralError{Kind: name, Line: *line, Column: *column}
 }
 
 // parse builds the AST from tokens
