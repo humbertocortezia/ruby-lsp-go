@@ -223,8 +223,29 @@ que chegue ao EOF sem fechamento retorna `IncompleteLiteralError`; não há
 retry que transforme um erro em sucesso. As posições após literais multilinha
 continuam sendo usadas pela indexação e navegação.
 
+Heredocs (`<<ID`, `<<-ID`, `<<~ID`, com aspas simples/duplas ou backticks)
+mantêm o corpo opaco ao fluxo de declarações. O lexer preserva os sufixos da
+linha de abertura, processa corpos múltiplos na ordem em que foram abertos e
+reutiliza o lexer de interpolação. Comentários `=begin`/`=end`, literais de
+caractere e símbolos de operadores também são reconhecidos; `__END__` encerra
+o código Ruby. Bindings locais e parâmetros distinguem divisão/deslocamento
+de regex/heredoc nos contextos cobertos pelos testes de escopo.
+
+O extrator ERB mantém offsets e quebras de linha do template, substituindo
+apenas o conteúdo host e os delimitadores por espaços/separadores. Comentários
+ERB, tags escapadas e delimitadores de trim não entram no Ruby. Falhas de
+extração, incluindo uma tag não fechada, são reportadas e não publicam AST
+parcial. Os diagnósticos usam o mesmo lexer e apontam ao início do literal
+incompleto, evitando uma segunda interpretação incompatível de heredocs.
+
+O comando anunciado `rubyLspGo.reindexWorkspace` usa `workspace/executeCommand`.
+O cliente registra o comando automaticamente; a extensão adiciona o feedback
+via middleware, sem registro duplicado. Requisições inválidas ou indisponíveis
+retornam erros JSON-RPC, não sucesso falso ou requisições sem resposta. A rota
+privada anterior continua disponível por compatibilidade.
+
 O parser continua sendo uma aproximação permissiva de Ruby, sem validação
-completa de heredocs ou de toda a gramática e seus estados de escopo. O fuzzing
+completa de toda a gramática e seus estados de escopo. O fuzzing
 verifica robustez; os testes de regressão verificam os tokens, posições e a
 indexação dos exemplos da issue #9, sem prometer AST completo para toda a linguagem.
 `recover` não intercepta erros fatais do runtime, como esgotamento de memória
@@ -237,6 +258,19 @@ go test ./...
 go test -race ./...
 go test ./parser -run='^$' -fuzz=FuzzParseSource -fuzztime=10s -parallel=2 -timeout=60s
 ```
+
+Os testes de sintaxe de fixtures usam `ruby -c`, quando Ruby está disponível,
+sem executar os exemplos. A checagem opcional de um corpus compara a aceitação
+do parser com arquivos confirmados válidos pelo compilador Ruby:
+
+```sh
+RUBY_LSP_GO_CORPUS=/path/to/ruby/files go test ./parser -run TestRubyCorpus -v -timeout=180s
+cd vscode-extension && npm test
+```
+
+Aceitar um corpus não comprova que cada AST, referência ou construção Ruby seja
+modelada por completo. Os testes de indexação verificam separadamente símbolos,
+posições, reindexação e descarte de resultados inválidos.
 
 O teste em subprocesso executa o `main` real por stdio, inclusive com
 instrumentação de race, e aguarda eventos de conclusão com timeout. Ele cobre

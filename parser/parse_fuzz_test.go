@@ -8,6 +8,9 @@ import (
 )
 
 func FuzzParseSource(f *testing.F) {
+	for _, source := range boundaryCases() {
+		f.Add(source)
+	}
 	for _, source := range incompleteLiterals() {
 		f.Add(source)
 	}

@@ -44,6 +44,9 @@ func Diagnostics(ctx *Context, params interface{}) interface{} {
 	parseSource := doc.Source()
 	if isERB(uri) {
 		parseSource = extractRubyForDiagnostics(doc)
+		if erb, ok := doc.(interface{ Scanner() *parser.ERBScanner }); ok && erb.Scanner() != nil && erb.Scanner().Err() != nil {
+			return map[string]interface{}{"kind": "full", "items": diagnosticForParseError(erb.Scanner().Err())}
+		}
 	}
 
 	// Try RuboCop first. We still pass the full document for ERB so a
@@ -158,22 +161,7 @@ func runRuboCop(source, filePath string) []interface{} {
 func syntaxDiagnostics(source string) []interface{} {
 	_, err := parser.ParseSource(source)
 	if err != nil {
-		message := fmt.Sprintf("Syntax error: %v", err)
-		var failure *parser.PanicError
-		if errors.As(err, &failure) {
-			message = err.Error()
-		}
-		return []interface{}{
-			map[string]interface{}{
-				"range": map[string]interface{}{
-					"start": map[string]interface{}{"line": 0, "character": 0},
-					"end":   map[string]interface{}{"line": 0, "character": 1},
-				},
-				"severity": 1,
-				"source":   "ruby-lsp-go",
-				"message":  message,
-			},
-		}
+		return diagnosticForParseError(err)
 	}
 
 	// Fallback: count only unambiguous brace delimiters (`{`/`}` and
@@ -200,48 +188,51 @@ func syntaxDiagnostics(source string) []interface{} {
 	return nil
 }
 
+func diagnosticForParseError(err error) []interface{} {
+	message := fmt.Sprintf("Syntax error: %v", err)
+	var failure *parser.PanicError
+	if errors.As(err, &failure) {
+		message = err.Error()
+	}
+	line, column := 0, 0
+	var incomplete *parser.IncompleteLiteralError
+	if errors.As(err, &incomplete) {
+		line, column = incomplete.Line, incomplete.Column
+	}
+	return []interface{}{map[string]interface{}{
+		"range": map[string]interface{}{
+			"start": map[string]interface{}{"line": line, "character": column},
+			"end":   map[string]interface{}{"line": line, "character": column + 1},
+		},
+		"severity": 1, "source": "ruby-lsp-go", "message": message,
+	}}
+}
+
 // countUnbalancedBraces returns (true, "{") if the source has more "{" than "}",
 // (true, "}") if it has more "}" than "{", (true, "(") or (true, ")") for parens,
 // and (false, "") otherwise. Comments (# to end of line) and strings ("..." / '...')
 // are skipped so identifiers inside them do not affect the count.
 func countUnbalancedBraces(source string) (bool, string) {
+	tokens, err := parser.Tokenize(source)
+	if err != nil {
+		return false, ""
+	} // syntaxDiagnostics reports the lexical error first
 	opensBraces := 0
 	closesBraces := 0
 	opensParens := 0
 	closesParens := 0
-	for i := 0; i < len(source); i++ {
-		c := source[i]
-		// Skip line comments
-		if c == '#' {
-			for i < len(source) && source[i] != '\n' {
-				i++
-			}
+	for _, token := range tokens {
+		if token.Type != parser.TokenPunctuation {
 			continue
 		}
-		// Skip strings (single and double quoted). We do not attempt to
-		// handle percent-strings (%w, %i, %q, %r) or heredocs because
-		// those are rare edge cases and a false negative there is less
-		// harmful than a false positive on every class/if block.
-		if c == '"' || c == '\'' {
-			quote := c
-			i++
-			for i < len(source) && source[i] != quote {
-				if source[i] == '\\' && i+1 < len(source) {
-					i += 2
-					continue
-				}
-				i++
-			}
-			continue
-		}
-		switch c {
-		case '{':
+		switch token.Literal {
+		case "{":
 			opensBraces++
-		case '}':
+		case "}":
 			closesBraces++
-		case '(':
+		case "(":
 			opensParens++
-		case ')':
+		case ")":
 			closesParens++
 		}
 	}

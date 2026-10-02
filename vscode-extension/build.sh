@@ -79,8 +79,8 @@ else
   echo "Skipping npm audit because SKIP_NPM_AUDIT=1."
 fi
 
-echo "Compiling TypeScript..."
-npm run compile
+echo "Compiling and testing the extension..."
+npm test
 
 echo "Packaging extension..."
 rm -f "$VSIX_PATH"

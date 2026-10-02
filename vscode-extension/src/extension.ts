@@ -64,6 +64,28 @@ export async function activate(context: ExtensionContext) {
       fileEvents: workspace.createFileSystemWatcher("**/*.{rb,erb,rbs}"),
     },
     outputChannel: outputChannel,
+    middleware: {
+      // The language client registers advertised executeCommandProvider
+      // commands. Registering the same VS Code command again would conflict.
+      executeCommand: async (command, args, next) => {
+        if (command !== "rubyLspGo.reindexWorkspace") {
+          return next(command, args);
+        }
+        try {
+          const result = await next(command, args);
+          if (!result || result.started !== true) {
+            throw new Error(result?.error ?? "The server did not start workspace reindexing.");
+          }
+          window.showInformationMessage("Ruby LSP Go workspace reindex started");
+          return result;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          outputChannel.appendLine(`Workspace reindex failed: ${message}`);
+          window.showErrorMessage(`Ruby LSP Go workspace reindex failed: ${message}`);
+          throw error;
+        }
+      },
+    },
     initializationOptions: {
       enabledFeatures: getEnabledFeatures(),
       formatter: workspace.getConfiguration("rubyLspGo").get("formatter"),
@@ -98,10 +120,6 @@ export async function activate(context: ExtensionContext) {
       await client.stop();
       await client.start();
       window.showInformationMessage("Ruby LSP Go restarted");
-    }),
-    commands.registerCommand("rubyLspGo.reindexWorkspace", async () => {
-      await client.sendRequest("rubyLspGo/reindexWorkspace");
-      window.showInformationMessage("Ruby LSP Go workspace reindex started");
     })
   );
 

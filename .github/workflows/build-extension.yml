@@ -26,6 +26,17 @@ jobs:
       - name: Test
         run: go test ./...
 
+      - name: Set up Ruby syntax oracle
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.4'
+
+      - name: Validate fixtures and standard-library corpus against Ruby
+        run: |
+          go test ./parser -run TestBoundaryCasesAcceptedByRuby -count=1
+          RUBY_LSP_GO_CORPUS="$(ruby -rrbconfig -e 'print RbConfig::CONFIG["rubylibdir"]')" \
+            go test ./parser -run TestRubyCorpus -count=1 -timeout=90s
+
       - name: Test with race detector
         run: go test -race ./...
 

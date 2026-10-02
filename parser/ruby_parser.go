@@ -10,8 +10,8 @@ import (
 type TokenType int
 
 const (
-	TokenEOF TokenType = iota
-	TokenNewline
+	TokenEOF     TokenType = iota
+	TokenNewline           // Ruby statement separators: newline or semicolon
 	TokenWhitespace
 	TokenComment
 	TokenIdentifier
@@ -118,10 +118,14 @@ func (r *Range) Contains(pos Position) bool {
 
 // RubyParser parses Ruby source code into a simplified AST
 type RubyParser struct {
-	source string
-	tokens []Token
-	pos    int
-	lines  []string
+	source           string
+	tokens           []Token
+	pos              int
+	lines            []string
+	heredocEnds      map[int]int // body start -> end, shared with interpolation lexers
+	outerLexer       *RubyParser // enclosing interpolation context, resolved only when needed
+	localsCache      map[string]bool
+	localsTokenCount int
 }
 
 // Parse parses Ruby source code and returns an AST
@@ -150,12 +154,26 @@ func (p *RubyParser) tokenize() error {
 	return err
 }
 
+// Tokenize exposes the same literal-aware lexer used by the AST parser.
+// Consumers must not inspect a partial token stream after a lexical error.
+func Tokenize(source string) ([]Token, error) {
+	p := &RubyParser{source: source}
+	if err := p.tokenize(); err != nil {
+		return nil, err
+	}
+	return p.tokens, nil
+}
+
 // tokenizeFrom also scans Ruby expressions inside #{...}. Reusing the lexer
 // keeps braces in strings, regexes, comments and global variables from closing
 // an interpolation prematurely. Nested tokens belong to that expression, not
 // to the outer AST's statement stream.
 func (p *RubyParser) tokenizeFrom(start int, interpolation bool) (int, error) {
 	p.tokens = []Token{}
+	p.localsCache = nil
+	if p.heredocEnds == nil {
+		p.heredocEnds = make(map[int]int)
+	}
 	line, column := sourcePosition(p.source, start)
 	braceDepth := 1
 
@@ -166,11 +184,59 @@ func (p *RubyParser) tokenizeFrom(start int, interpolation bool) (int, error) {
 			p.tokens = append(p.tokens, Token{Type: TokenNewline, Literal: "\n", Line: line, Column: column})
 			line++
 			column = 0
+			if end, ok := p.heredocEnds[i+1]; ok {
+				i = end - 1
+				line, column = sourcePosition(p.source, end)
+			}
+			continue
+		}
+
+		if column == 0 && lineMarkerAt(p.source, i, "=begin") {
+			end, err := p.scanBlockComment(i)
+			if err != nil {
+				return i, err
+			}
+			p.tokens = append(p.tokens, Token{Type: TokenComment, Literal: p.source[i:end], Line: line, Column: column})
+			i = end - 1
+			line, column = sourcePosition(p.source, end)
+			continue
+		}
+		if !interpolation && column == 0 && dataMarkerAt(p.source, i) {
+			break // __END__ starts a data section, not Ruby statements.
+		}
+
+		if ch == '<' && i+1 < len(p.source) && p.source[i+1] == '<' && p.regexExpected(i) {
+			opening, ok := heredocAt(p.source, i)
+			if ok {
+				bodyStart, end, err := p.scanHeredoc(opening)
+				if err != nil {
+					return i, err
+				}
+				p.tokens = append(p.tokens, Token{Type: TokenHEREDoc, Literal: p.source[i:opening.end] + "\n" + p.source[bodyStart:end], Line: line, Column: column})
+				column += opening.end - i
+				i = opening.end - 1
+				continue
+			}
+		}
+
+		if ch == '?' && p.regexExpected(i) && i+1 < len(p.source) && !unicode.IsSpace(rune(p.source[i+1])) {
+			end, err := p.scanCharacter(i)
+			if err != nil {
+				return i, err
+			}
+			p.tokens = append(p.tokens, Token{Type: TokenString, Literal: p.source[i:end], Line: line, Column: column})
+			column += end - i
+			i = end - 1
 			continue
 		}
 
 		if ch == ' ' || ch == '\t' || ch == '\r' {
 			p.tokens = append(p.tokens, Token{Type: TokenWhitespace, Literal: string(ch), Line: line, Column: column})
+			column++
+			continue
+		}
+		if ch == ';' {
+			p.tokens = append(p.tokens, Token{Type: TokenNewline, Literal: ";", Line: line, Column: column})
 			column++
 			continue
 		}
@@ -230,13 +296,10 @@ func (p *RubyParser) tokenizeFrom(start int, interpolation bool) (int, error) {
 				}
 				i = end - 1
 				continue
-			} else if unicode.IsLetter(rune(nextCh)) || nextCh == '_' {
+			} else if symbolEnd := bareSymbolEnd(p.source, i); symbolEnd > i {
 				// Symbol literal
 				start := i
-				i++
-				for i < len(p.source) && (unicode.IsLetter(rune(p.source[i])) || unicode.IsDigit(rune(p.source[i])) || p.source[i] == '_') {
-					i++
-				}
+				i = symbolEnd
 				p.tokens = append(p.tokens, Token{
 					Type:    TokenSymbol,
 					Literal: p.source[start:i],
@@ -347,7 +410,8 @@ func (p *RubyParser) tokenizeFrom(start int, interpolation bool) (int, error) {
 			literal := p.source[start:i]
 
 			tokenType := TokenIdentifier
-			if isKeyword(literal) {
+			previous, _ := p.previousToken(len(p.tokens))
+			if isKeyword(literal) && previous.Literal != "." && previous.Literal != "::" {
 				tokenType = TokenKeyword
 			}
 
@@ -444,6 +508,10 @@ func (p *RubyParser) scanLiteral(start, opening int, kind TokenType, line, colum
 	depth := 1
 	end := opening + 1
 	for end < len(p.source) {
+		if next, ok := p.heredocEnds[end]; ok {
+			end = next
+			continue
+		}
 		ch := p.source[end]
 		end++
 		if ch == '\\' {
@@ -454,7 +522,7 @@ func (p *RubyParser) scanLiteral(start, opening int, kind TokenType, line, colum
 		}
 		if interpolates && ch == '#' && end < len(p.source) {
 			if p.source[end] == '{' {
-				nested := &RubyParser{source: p.source}
+				nested := p.interpolationParser()
 				next, err := nested.tokenizeFrom(end+1, true)
 				if err != nil {
 					return next, err
@@ -465,6 +533,11 @@ func (p *RubyParser) scanLiteral(start, opening int, kind TokenType, line, colum
 			if p.source[end] == '$' {
 				end = globalVariableEnd(p.source, end)
 				continue
+			}
+		}
+		if ch == '\n' {
+			if next, ok := p.heredocEnds[end]; ok {
+				end = next
 			}
 		}
 		if paired && ch == delimiter {
