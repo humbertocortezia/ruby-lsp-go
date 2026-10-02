@@ -27,12 +27,22 @@ to install the executable separately when using a package produced by
 ## Installation
 
 1. Build the extension from the repository:
+
+   Building requires Go 1.21 or newer (as specified in `go.mod`), Node.js,
+   npm, and Python 3. These build tools are not required to install the VSIX.
+
    ```bash
    cd ruby-lsp-go/vscode-extension
    ./build.sh
    ```
 
    The script compiles and packages the server binaries inside the `.vsix`.
+   It checks the Go version before changing the bundled binaries. If a compatible
+   Go installation is not on your `PATH`, select it explicitly:
+
+   ```bash
+   GO_COMMAND=/path/to/go ./build.sh
+   ```
 
 2. Install the generated `.vsix` in VS Code or Cursor
 

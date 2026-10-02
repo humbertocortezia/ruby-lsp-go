@@ -146,11 +146,20 @@ func parse(source string) (*Node, error) {
 
 // tokenize converts the source into tokens
 func (p *RubyParser) tokenize() error {
-	p.tokens = []Token{}
-	line := 0
-	column := 0
+	_, err := p.tokenizeFrom(0, false)
+	return err
+}
 
-	for i := 0; i < len(p.source); i++ {
+// tokenizeFrom also scans Ruby expressions inside #{...}. Reusing the lexer
+// keeps braces in strings, regexes, comments and global variables from closing
+// an interpolation prematurely. Nested tokens belong to that expression, not
+// to the outer AST's statement stream.
+func (p *RubyParser) tokenizeFrom(start int, interpolation bool) (int, error) {
+	p.tokens = []Token{}
+	line, column := sourcePosition(p.source, start)
+	braceDepth := 1
+
+	for i := start; i < len(p.source); i++ {
 		ch := p.source[i]
 
 		if ch == '\n' {
@@ -183,31 +192,29 @@ func (p *RubyParser) tokenize() error {
 			continue
 		}
 
-		if ch == '"' || ch == '\'' {
+		if ch == '"' || ch == '\'' || ch == '`' {
 			end, err := p.scanLiteral(i, i, TokenString, &line, &column)
 			if err != nil {
-				return err
+				return i, err
 			}
 			i = end - 1 // the outer loop advances to the next byte
 			continue
 		}
 
-		if ch == '/' && i+1 < len(p.source) && p.source[i+1] != ' ' && p.source[i+1] != '\n' {
-			// Could be regex - check previous token
-			isRegex := true
-			if len(p.tokens) > 0 {
-				prev := p.tokens[len(p.tokens)-1]
-				if prev.Type == TokenIdentifier || prev.Type == TokenConstant || prev.Type == TokenNumber ||
-					prev.Type == TokenString || prev.Type == TokenSymbol || prev.Type == TokenPunctuation &&
-					(prev.Literal == ")" || prev.Literal == "]") {
-					isRegex = false
-				}
+		if ch == '/' && p.regexExpected(i) {
+			end, err := p.scanLiteral(i, i, TokenRegex, &line, &column)
+			if err != nil {
+				return i, err
 			}
+			i = end - 1
+			continue
+		}
 
-			if isRegex {
-				end, err := p.scanLiteral(i, i, TokenRegex, &line, &column)
+		if ch == '%' && p.regexExpected(i) {
+			if opening, kind, ok := percentLiteralAt(p.source, i); ok {
+				end, err := p.scanLiteral(i, opening, kind, &line, &column)
 				if err != nil {
-					return err
+					return i, err
 				}
 				i = end - 1
 				continue
@@ -219,7 +226,7 @@ func (p *RubyParser) tokenize() error {
 			if nextCh == '\'' || nextCh == '"' {
 				end, err := p.scanLiteral(i, i+1, TokenSymbol, &line, &column)
 				if err != nil {
-					return err
+					return i, err
 				}
 				i = end - 1
 				continue
@@ -279,12 +286,8 @@ func (p *RubyParser) tokenize() error {
 		}
 
 		if ch == '$' {
-			// Global variable
 			start := i
-			i++
-			for i < len(p.source) && (unicode.IsLetter(rune(p.source[i])) || unicode.IsDigit(rune(p.source[i])) || p.source[i] == '_') {
-				i++
-			}
+			i = globalVariableEnd(p.source, start)
 			p.tokens = append(p.tokens, Token{
 				Type:    TokenGlobalVariable,
 				Literal: p.source[start:i],
@@ -331,7 +334,14 @@ func (p *RubyParser) tokenize() error {
 
 		if unicode.IsLetter(rune(ch)) || ch == '_' {
 			start := i
-			for i < len(p.source) && (unicode.IsLetter(rune(p.source[i])) || unicode.IsDigit(rune(p.source[i])) || p.source[i] == '_' || p.source[i] == '!' || p.source[i] == '?' || p.source[i] == '=') {
+			for i < len(p.source) && (unicode.IsLetter(rune(p.source[i])) || unicode.IsDigit(rune(p.source[i])) || p.source[i] == '_') {
+				i++
+			}
+			// Ruby method suffixes are part of the name. Assignment and !=
+			// operators are separate tokens, even when there is no whitespace.
+			if i < len(p.source) && (p.source[i] == '!' || p.source[i] == '?') && (i+1 == len(p.source) || p.source[i+1] != '=') {
+				i++
+			} else if i < len(p.source) && p.source[i] == '=' && p.methodNameExpected() && (i+1 == len(p.source) || p.source[i+1] != '=') {
 				i++
 			}
 			literal := p.source[start:i]
@@ -379,6 +389,16 @@ func (p *RubyParser) tokenize() error {
 		}
 
 		if ch == '(' || ch == ')' || ch == '{' || ch == '}' || ch == '[' || ch == ']' || ch == ',' || ch == ';' || ch == '.' {
+			if interpolation {
+				if ch == '{' {
+					braceDepth++
+				} else if ch == '}' {
+					braceDepth--
+					if braceDepth == 0 {
+						return i + 1, nil
+					}
+				}
+			}
 			p.tokens = append(p.tokens, Token{
 				Type:    TokenPunctuation,
 				Literal: string(ch),
@@ -393,14 +413,35 @@ func (p *RubyParser) tokenize() error {
 		column++
 	}
 
+	if interpolation {
+		line, column := sourcePosition(p.source, start-2)
+		return len(p.source), &IncompleteLiteralError{Kind: "interpolation", Line: line, Column: column}
+	}
 	p.tokens = append(p.tokens, Token{Type: TokenEOF, Literal: "", Line: line, Column: column})
-	return nil
+	return len(p.source), nil
 }
 
 // scanLiteral returns an exclusive end offset only after finding an unescaped
 // closing delimiter. Incomplete tokens are never passed to AST consumers.
 func (p *RubyParser) scanLiteral(start, opening int, kind TokenType, line, column *int) (int, error) {
 	delimiter := p.source[opening]
+	interpolates := delimiter != '\''
+	closing := delimiter
+	paired := false
+	if p.source[start] == '%' {
+		interpolates = !strings.ContainsRune("qwis", rune(p.source[start+1]))
+		switch delimiter {
+		case '(':
+			closing, paired = ')', true
+		case '[':
+			closing, paired = ']', true
+		case '{':
+			closing, paired = '}', true
+		case '<':
+			closing, paired = '>', true
+		}
+	}
+	depth := 1
 	end := opening + 1
 	for end < len(p.source) {
 		ch := p.source[end]
@@ -411,8 +452,36 @@ func (p *RubyParser) scanLiteral(start, opening int, kind TokenType, line, colum
 			}
 			continue
 		}
-		if ch != delimiter {
+		if interpolates && ch == '#' && end < len(p.source) {
+			if p.source[end] == '{' {
+				nested := &RubyParser{source: p.source}
+				next, err := nested.tokenizeFrom(end+1, true)
+				if err != nil {
+					return next, err
+				}
+				end = next
+				continue
+			}
+			if p.source[end] == '$' {
+				end = globalVariableEnd(p.source, end)
+				continue
+			}
+		}
+		if paired && ch == delimiter {
+			depth++
 			continue
+		}
+		if ch != closing {
+			continue
+		}
+		depth--
+		if depth != 0 {
+			continue
+		}
+		if kind == TokenRegex {
+			for end < len(p.source) && strings.ContainsRune("imxounes", rune(p.source[end])) {
+				end++
+			}
 		}
 		literal := p.source[start:end]
 		p.tokens = append(p.tokens, Token{Type: kind, Literal: literal, Line: *line, Column: *column})
