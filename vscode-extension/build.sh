@@ -19,10 +19,37 @@ TARGETS=(
 
 echo "Building VS Code extension for Ruby LSP Go..."
 
-if ! command -v "$GO_COMMAND" >/dev/null 2>&1; then
-  echo "Error: Go 1.21+ is required to bundle the Ruby LSP Go server." >&2
+MIN_GO_VERSION="$(awk '$1 == "go" { print $2; exit }' "$PROJECT_DIR/go.mod")"
+if [[ ! "$MIN_GO_VERSION" =~ ^([0-9]+)\.([0-9]+)(\.([0-9]+))?$ ]]; then
+  echo "Error: Cannot determine the required Go version from go.mod." >&2
   exit 1
 fi
+min_go_major="${BASH_REMATCH[1]}"
+min_go_minor="${BASH_REMATCH[2]}"
+min_go_patch="${BASH_REMATCH[4]:-0}"
+
+if ! command -v "$GO_COMMAND" >/dev/null 2>&1; then
+  echo "Error: Go $MIN_GO_VERSION+ is required to bundle the Ruby LSP Go server." >&2
+  echo "Install a compatible Go toolchain or set GO_COMMAND=/path/to/go." >&2
+  exit 1
+fi
+
+GO_VERSION="$("$GO_COMMAND" env GOVERSION)"
+if [[ ! "$GO_VERSION" =~ ^go([0-9]+)\.([0-9]+)(\.([0-9]+))?$ ]]; then
+  echo "Error: Unsupported Go version '$GO_VERSION'; use a stable Go $MIN_GO_VERSION+ toolchain." >&2
+  exit 1
+fi
+go_major="${BASH_REMATCH[1]}"
+go_minor="${BASH_REMATCH[2]}"
+go_patch="${BASH_REMATCH[4]:-0}"
+if (( go_major < min_go_major ||
+      (go_major == min_go_major && go_minor < min_go_minor) ||
+      (go_major == min_go_major && go_minor == min_go_minor && go_patch < min_go_patch) )); then
+  echo "Error: $GO_COMMAND reports $GO_VERSION, but this project requires Go $MIN_GO_VERSION+ (go.mod)." >&2
+  echo "Install a compatible Go toolchain or run GO_COMMAND=/path/to/go ./build.sh." >&2
+  exit 1
+fi
+echo "Using $GO_VERSION ($GO_COMMAND)."
 
 rm -rf "$BIN_DIR"
 mkdir -p "$BIN_DIR"

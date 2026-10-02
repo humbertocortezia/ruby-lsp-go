@@ -2,6 +2,7 @@ package parser
 
 import (
 	"errors"
+	"os"
 	"testing"
 	"time"
 )
@@ -10,6 +11,11 @@ func FuzzParseSource(f *testing.F) {
 	for _, source := range incompleteLiterals() {
 		f.Add(source)
 	}
+	source, err := os.ReadFile("testdata/issue9.rb")
+	if err != nil {
+		f.Fatal(err)
+	}
+	f.Add(string(source))
 	for _, source := range []string{
 		"", "'ok'", `"ok"`, `:'ok'`, `:"ok"`, `/ok/`,
 		`'escaped\''`, `"escaped\""`, `:'escaped\''`, `:"escaped\""`, `/escaped\//`, `"backslash\\"`,
@@ -18,6 +24,12 @@ func FuzzParseSource(f *testing.F) {
 		"message = <<~TEXT\nhello\nTEXT\n", "message = <<'TEXT'\nunfinished",
 		"%q{hello}", "%Q(hello #{name})", "%q{unfinished", "%Q(unfinished\\",
 		"class Outer\nclass Inner\nend\nend\n",
+		`"outer #{"inner #{name}"} tail"`,
+		`"#{ {key: "value"}.fetch(:key) }"`,
+		`"#{ %Q{inner #{"value"}} }"`,
+		`"#{name.gsub(/\}/, "}")}"`,
+		`process_structclass(name, $')`,
+		"pattern = /\n  (?<year>\\d{4})\n/x.match(path)",
 	} {
 		f.Add(source)
 	}

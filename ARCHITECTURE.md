@@ -209,10 +209,24 @@ publicado. Documentos Ruby/ERB descartam o AST anterior ao receber erro, e o
 fallback de diagnósticos informa a falha. Uma edição válida posterior permite
 indexar e analisar o arquivo novamente.
 
+O tokenizer reconhece as variáveis globais especiais e backreferences de Ruby
+(`$'`, `$"`, `$/`, etc.) como tokens completos. Regexes podem começar com
+espaços ou quebras de linha e incluem suas opções (`/x`, `/im`, etc.); a
+distinção de divisão usa o contexto da expressão, ignorando espaços entre
+tokens. Operadores de atribuição não fazem parte do nome da variável.
+
+Strings e símbolos com interpolação mantêm o literal externo inteiro. As
+expressões de `#{...}` passam pelo mesmo lexer: aspas, regexes, comentários e
+literais percentuais dentro delas não encerram a interpolação antes da hora.
+Delimitadores percentuais pareados podem ser aninhados. Interpolação ou literal
+que chegue ao EOF sem fechamento retorna `IncompleteLiteralError`; não há
+retry que transforme um erro em sucesso. As posições após literais multilinha
+continuam sendo usadas pela indexação e navegação.
+
 O parser continua sendo uma aproximação permissiva de Ruby, sem validação
-completa de heredocs, `%q/%Q`, interpolação ou da ambiguidade entre divisão e
-regex. Um `/` isolado continua sendo tratado como operador. O fuzzing inclui
-essas construções para verificar robustez, sem prometer AST completo para elas.
+completa de heredocs ou de toda a gramática e seus estados de escopo. O fuzzing
+verifica robustez; os testes de regressão verificam os tokens, posições e a
+indexação dos exemplos da issue #9, sem prometer AST completo para toda a linguagem.
 `recover` não intercepta erros fatais do runtime, como esgotamento de memória
 ou stack, nem interrompe loops; o teste de fuzz tem timeout por entrada.
 
