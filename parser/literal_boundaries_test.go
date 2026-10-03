@@ -17,6 +17,7 @@ func boundaryCases() []string {
 			sources = append(sources, "value = "+expression+"\nIt's a read/write helper. } \"\n"+closing+"\n")
 		}
 	}
+	sources = append(sources, operatorMethodCases()...)
 	return append(sources,
 		"total = 12\nvalue = total /count\n",
 		"values = []\nvalues <<ITEM\n",

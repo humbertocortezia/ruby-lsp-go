@@ -100,6 +100,7 @@ type Node struct {
 	Parent       *Node    `json:"-"`
 	Visibility   string   `json:"visibility,omitempty"`
 	Detail       string   `json:"detail,omitempty"`
+	Receiver     string   `json:"receiver,omitempty"` // singleton method receiver, empty for instance methods
 }
 
 // Contains checks if a position is within the node's range
@@ -203,6 +204,19 @@ func (p *RubyParser) tokenizeFrom(start int, interpolation bool) (int, error) {
 		}
 		if !interpolation && column == 0 && dataMarkerAt(p.source, i) {
 			break // __END__ starts a data section, not Ruby statements.
+		}
+
+		// In a method-name context, punctuation names are code, not literal
+		// openers. This must precede heredoc, regexp and command-string scanning.
+		if strings.ContainsRune("`/%[+-<>=!&|^~*", rune(ch)) {
+			if name, _ := p.methodNameContext(); name {
+				if end := operatorMethodEnd(p.source, i); end > i {
+					p.tokens = append(p.tokens, Token{Type: TokenOperator, Literal: p.source[i:end], Line: line, Column: column})
+					column += end - i
+					i = end - 1
+					continue
+				}
+			}
 		}
 
 		if ch == '<' && i+1 < len(p.source) && p.source[i+1] == '<' && p.regexExpected(i) {
@@ -364,8 +378,16 @@ func (p *RubyParser) tokenizeFrom(start int, interpolation bool) (int, error) {
 
 		if unicode.IsDigit(rune(ch)) {
 			start := i
-			for i < len(p.source) && (unicode.IsDigit(rune(p.source[i])) || p.source[i] == '.' || p.source[i] == '_') {
+			for i < len(p.source) && (unicode.IsDigit(rune(p.source[i])) || p.source[i] == '_') {
 				i++
+			}
+			// A decimal point belongs to a number only before another digit.
+			// Leave receiver dots and range operators for the code lexer.
+			if i+1 < len(p.source) && p.source[i] == '.' && unicode.IsDigit(rune(p.source[i+1])) {
+				i++
+				for i < len(p.source) && (unicode.IsDigit(rune(p.source[i])) || p.source[i] == '_') {
+					i++
+				}
 			}
 			p.tokens = append(p.tokens, Token{
 				Type:    TokenNumber,
@@ -381,8 +403,17 @@ func (p *RubyParser) tokenizeFrom(start int, interpolation bool) (int, error) {
 		if unicode.IsUpper(rune(ch)) {
 			// Constant
 			start := i
-			for i < len(p.source) && (unicode.IsLetter(rune(p.source[i])) || unicode.IsDigit(rune(p.source[i])) || p.source[i] == '_' || p.source[i] == ':') {
-				i++
+			for {
+				for i < len(p.source) && (unicode.IsLetter(rune(p.source[i])) || unicode.IsDigit(rune(p.source[i])) || p.source[i] == '_') {
+					i++
+				}
+				// Keep qualified constants together, but do not absorb the
+				// selector of a method call such as Shell::`("echo").
+				if i+2 < len(p.source) && p.source[i:i+2] == "::" && unicode.IsUpper(rune(p.source[i+2])) {
+					i += 2
+					continue
+				}
+				break
 			}
 			p.tokens = append(p.tokens, Token{
 				Type:    TokenConstant,
@@ -410,8 +441,8 @@ func (p *RubyParser) tokenizeFrom(start int, interpolation bool) (int, error) {
 			literal := p.source[start:i]
 
 			tokenType := TokenIdentifier
-			previous, _ := p.previousToken(len(p.tokens))
-			if isKeyword(literal) && previous.Literal != "." && previous.Literal != "::" {
+			nameContext, _ := p.methodNameContext()
+			if isKeyword(literal) && !nameContext {
 				tokenType = TokenKeyword
 			}
 
@@ -426,30 +457,22 @@ func (p *RubyParser) tokenizeFrom(start int, interpolation bool) (int, error) {
 			continue
 		}
 
-		if isOperator(string(ch)) {
-			// Multi-char operators
-			if i+1 < len(p.source) {
-				twoChar := p.source[i : i+2]
-				if isOperator(twoChar) {
-					p.tokens = append(p.tokens, Token{
-						Type:    TokenOperator,
-						Literal: twoChar,
-						Line:    line,
-						Column:  column,
-					})
-					column += 2
-					i++
-					continue
-				}
+		if isOperator(string(ch)) || ch == '.' {
+			// Longest match, including ranges. Two separate dots would falsely
+			// leave us expecting a method name before a following command string.
+			end := i + 3
+			if end > len(p.source) {
+				end = len(p.source)
 			}
-			p.tokens = append(p.tokens, Token{
-				Type:    TokenOperator,
-				Literal: string(ch),
-				Line:    line,
-				Column:  column,
-			})
-			column++
-			continue
+			for end > i && !isOperator(p.source[i:end]) {
+				end--
+			}
+			if end > i {
+				p.tokens = append(p.tokens, Token{Type: TokenOperator, Literal: p.source[i:end], Line: line, Column: column})
+				column += end - i
+				i = end - 1
+				continue
+			}
 		}
 
 		if ch == '(' || ch == ')' || ch == '{' || ch == '}' || ch == '[' || ch == ']' || ch == ',' || ch == ';' || ch == '.' {
@@ -807,18 +830,35 @@ func (p *RubyParser) parseMethod() *Node {
 	p.pos++ // consume 'def'
 
 	nodeType := NodeMethod
+	receiver := ""
 	methodName := ""
 	nameLine := 0
 	nameCol := 0
 	p.skipWhitespaceAndNewlines()
 
-	if p.pos < len(p.tokens) && p.tokens[p.pos].Literal == "self" {
-		p.pos++ // consume 'self'
+	// A singleton receiver is separate from the method's name. Recognize both
+	// selectors and parenthesized expressions without indexing the receiver as
+	// the name (def object.` and def (object).` are valid Ruby).
+	receiverStart := p.pos
+	if p.pos < len(p.tokens) {
+		if p.tokens[p.pos].Literal == "(" {
+			p.skipParens()
+		} else {
+			p.pos++
+		}
+		receiverEnd := p.pos
 		p.skipWhitespaceAndNewlines()
-		if p.pos < len(p.tokens) && p.tokens[p.pos].Literal == "." {
-			p.pos++ // consume '.'
+		if p.pos < len(p.tokens) && (p.tokens[p.pos].Literal == "." || p.tokens[p.pos].Literal == "::") {
+			for _, token := range p.tokens[receiverStart:receiverEnd] {
+				if token.Type != TokenWhitespace && token.Type != TokenNewline && token.Type != TokenComment {
+					receiver += token.Literal
+				}
+			}
+			p.pos++ // consume selector
 			p.skipWhitespaceAndNewlines()
 			nodeType = NodeSingletonMethod
+		} else {
+			p.pos = receiverStart
 		}
 	}
 
@@ -843,8 +883,9 @@ func (p *RubyParser) parseMethod() *Node {
 	}
 
 	methodNode := &Node{
-		Type: nodeType,
-		Name: methodName,
+		Type:     nodeType,
+		Name:     methodName,
+		Receiver: receiver,
 		NamePosition: Position{
 			Line:      nameLine,
 			Character: nameCol,
@@ -1992,7 +2033,7 @@ func isOperator(literal string) bool {
 		"+", "-", "*", "/", "%", "**", "==", "!=", ">", "<", ">=", "<=", "<=>",
 		"===", "=~", "!~", "&&", "||", "!", "&", "|", "^", "~", "<<", ">>",
 		"=", "+=", "-=", "*=", "/=", "%=", "**=", "&=", "|=", "^=", "<<=", ">>=",
-		"&&=", "||=", "..", "...", "::", "=>", "?", ":",
+		"&&=", "||=", "..", "...", "::", "=>", "?", ":", "&.",
 	}
 	for _, op := range operators {
 		if op == literal {

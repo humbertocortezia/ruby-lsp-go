@@ -5,6 +5,19 @@ import (
 	"unicode"
 )
 
+// Longest first: Ruby's operator method names are indivisible in method-name
+// and symbol contexts, even when the same punctuation opens a literal elsewhere.
+var operatorMethodNames = []string{"[]=", "<=>", "===", "**", "<<", ">>", "<=", ">=", "==", "!=", "=~", "!~", "+@", "-@", "!@", "~@", "[]", "+", "-", "*", "/", "%", "&", "|", "^", "~", "<", ">", "!", "`"}
+
+func operatorMethodEnd(source string, start int) int {
+	for _, operator := range operatorMethodNames {
+		if strings.HasPrefix(source[start:], operator) {
+			return start + len(operator)
+		}
+	}
+	return start
+}
+
 func bareSymbolEnd(source string, start int) int {
 	i := start + 1
 	if i >= len(source) || source[i] == ':' || start > 0 && source[start-1] == ':' {
@@ -21,10 +34,8 @@ func bareSymbolEnd(source string, start int) int {
 	}
 	// Operator method names are symbols, too. Their slash/backtick/question
 	// mark must not open a regexp, command string or character literal.
-	for _, operator := range []string{"[]=", "<=>", "===", "**", "<<", ">>", "<=", ">=", "==", "!=", "=~", "!~", "+@", "-@", "[]", "+", "-", "*", "/", "%", "&", "|", "^", "~", "<", ">", "!", "`"} {
-		if strings.HasPrefix(source[i:], operator) {
-			return i + len(operator)
-		}
+	if end := operatorMethodEnd(source, i); end > i {
+		return end
 	}
 	return start
 }
@@ -92,17 +103,84 @@ func (p *RubyParser) previousToken(before int) (Token, int) {
 	return Token{}, -1
 }
 
-func (p *RubyParser) methodNameExpected() bool {
-	previous, i := p.previousToken(len(p.tokens))
-	if previous.Type == TokenKeyword && previous.Literal == "def" {
-		return true
+// Newlines/comments can appear while a required name is pending (after def,
+// a receiver selector, alias's first operand or undef's comma). Semicolons are
+// statement boundaries and must never preserve that context.
+func (p *RubyParser) previousMethodToken(before int) (Token, int) {
+	for i := before - 1; i >= 0; i-- {
+		token := p.tokens[i]
+		if token.Type != TokenWhitespace && token.Type != TokenComment && !(token.Type == TokenNewline && token.Literal == "\n") {
+			return token, i
+		}
 	}
-	if previous.Literal != "." {
+	return Token{}, -1
+}
+
+func isMethodNameToken(token Token) bool {
+	switch token.Type {
+	case TokenIdentifier, TokenConstant, TokenOperator, TokenSymbol, TokenKeyword:
+		return true
+	default:
 		return false
 	}
-	_, i = p.previousToken(i) // receiver
-	previous, _ = p.previousToken(i)
-	return previous.Type == TokenKeyword && previous.Literal == "def"
+}
+
+// methodNameContext models the distinction Ruby makes between a name and an
+// expression. The second result allows a setter suffix in declarations only:
+// obj.name=1 must still tokenize as a call name followed by assignment.
+func (p *RubyParser) methodNameContext() (name, declaration bool) {
+	previous, i := p.previousMethodToken(len(p.tokens))
+	if previous.Type == TokenKeyword {
+		switch previous.Literal {
+		case "def", "alias", "undef":
+			return true, true
+		}
+	}
+	if previous.Literal == "." || previous.Literal == "::" || previous.Literal == "&." {
+		last, receiver := p.previousMethodToken(i)
+		if last.Type == TokenPunctuation && last.Literal == ")" {
+			depth := 1
+			for receiver--; receiver >= 0; receiver-- {
+				token := p.tokens[receiver]
+				if token.Type != TokenPunctuation {
+					continue
+				}
+				if token.Literal == ")" {
+					depth++
+				} else if token.Literal == "(" {
+					depth--
+					if depth == 0 {
+						break
+					}
+				}
+			}
+		}
+		before, _ := p.previousMethodToken(receiver)
+		return true, before.Type == TokenKeyword && before.Literal == "def"
+	}
+	// alias has exactly two names, which may themselves be operator symbols.
+	before, _ := p.previousMethodToken(i)
+	if isMethodNameToken(previous) && before.Type == TokenKeyword && before.Literal == "alias" {
+		return true, true
+	}
+	// undef has a comma-separated name list. Walk only the list, never arbitrary
+	// earlier expressions (e.g. an array or call containing a comma).
+	for previous.Literal == "," {
+		operand, operandIndex := p.previousMethodToken(i)
+		if !isMethodNameToken(operand) {
+			break
+		}
+		previous, i = p.previousMethodToken(operandIndex)
+		if previous.Type == TokenKeyword && previous.Literal == "undef" {
+			return true, true
+		}
+	}
+	return false, false
+}
+
+func (p *RubyParser) methodNameExpected() bool {
+	_, declaration := p.methodNameContext()
+	return declaration
 }
 
 // regexExpected distinguishes a regexp from division using the expression
@@ -145,7 +223,7 @@ func (p *RubyParser) regexExpected(offset int) bool {
 			return false
 		}
 		beforeReceiver, _ := p.previousToken(previousIndex)
-		if beforeReceiver.Literal == "." || beforeReceiver.Literal == "::" {
+		if beforeReceiver.Literal == "." || beforeReceiver.Literal == "::" || beforeReceiver.Literal == "&." {
 			return true
 		}
 		return !p.visibleLocals()[previous.Literal]
@@ -254,7 +332,7 @@ func (p *RubyParser) visibleLocals() map[string]bool {
 			frame.names[token.Literal] = true
 			continue
 		}
-		if i > 0 && (tokens[i-1].Literal == "." || tokens[i-1].Literal == "::") {
+		if i > 0 && (tokens[i-1].Literal == "." || tokens[i-1].Literal == "::" || tokens[i-1].Literal == "&.") {
 			continue
 		}
 		if i > 0 && tokens[i-1].Literal == "=>" {
