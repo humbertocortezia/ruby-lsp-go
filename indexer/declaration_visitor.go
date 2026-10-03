@@ -183,6 +183,11 @@ func (v *DeclarationVisitor) visitMethod(node *parser.Node, singleton bool) {
 	sep := "#"
 	if singleton {
 		sep = "."
+		// Unlike def self.name, an explicit receiver owns this declaration,
+		// not the lexical class/module enclosing it.
+		if node.Receiver != "" && node.Receiver != "self" && node.Receiver != "(self)" {
+			owner = node.Receiver
+		}
 	}
 	fqn := name
 	if owner != "" {

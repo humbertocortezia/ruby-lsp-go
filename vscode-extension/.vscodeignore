@@ -5,6 +5,7 @@
 .DS_Store
 *.vsix
 src/**
+test/**
 tsconfig.json
 build.sh
 README.md

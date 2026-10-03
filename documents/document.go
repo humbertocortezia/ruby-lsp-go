@@ -2,6 +2,7 @@ package documents
 
 import (
 	"github.com/humberto/ruby-lsp-go/parser"
+	"strings"
 )
 
 // Document is the interface for all document types (Ruby, ERB, RBS).
@@ -56,6 +57,9 @@ func (d *BaseDocument) NodeAtPosition(line, col int) *parser.Node {
 
 // NewDocument creates the appropriate document type based on language ID or URI.
 func NewDocument(uri, source string, version int, languageID string) Document {
+	if strings.HasSuffix(strings.ToLower(uri), ".erb") || strings.HasSuffix(strings.ToLower(uri), ".rhtml") {
+		return NewERBDocument(uri, source, version, languageID)
+	}
 	switch languageID {
 	case "erb", "html.erb":
 		return NewERBDocument(uri, source, version, languageID)
