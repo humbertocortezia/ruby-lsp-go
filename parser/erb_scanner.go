@@ -6,13 +6,13 @@ import (
 
 // ERBRegion represents a region in an ERB file.
 type ERBRegion struct {
-	Kind       string // "ruby" or "host"
-	StartByte  int
-	EndByte    int
-	StartLine  int
-	StartCol   int
-	EndLine    int
-	EndCol     int
+	Kind      string // "ruby" or "host"
+	StartByte int
+	EndByte   int
+	StartLine int
+	StartCol  int
+	EndLine   int
+	EndCol    int
 }
 
 // ERBScanner separates Ruby code from host language (HTML) in ERB files.
@@ -21,7 +21,7 @@ type ERBScanner struct {
 	rubyContent strings.Builder
 	hostContent strings.Builder
 	regions     []ERBRegion
-	rubyMap     []int // maps ruby byte offset -> original byte offset
+	err         error
 }
 
 // NewERBScanner creates a scanner for ERB source.
@@ -32,68 +32,78 @@ func NewERBScanner(source string) *ERBScanner {
 }
 
 func (s *ERBScanner) scan() {
-	i := 0
-	rubyOffset := 0
-	for i < len(s.source) {
-		if i+1 < len(s.source) && s.source[i] == '<' && s.source[i+1] == '%' {
-			// Determine ERB tag type
-			tagStart := i
-			i += 2
-			isOutput := false
-			if i < len(s.source) && s.source[i] == '=' {
-				isOutput = true
-				i++
-			}
-
-			// Find closing %>
-			closeIdx := strings.Index(s.source[i:], "%>")
-			if closeIdx == -1 {
-				break
-			}
-			rubyCode := s.source[i : i+closeIdx]
-			i += closeIdx + 2
-
-			regionStart := rubyOffset
-			if !isOutput {
-				s.rubyContent.WriteString(rubyCode)
-				for range rubyCode {
-					s.rubyMap = append(s.rubyMap, tagStart)
-				}
-				rubyOffset += len(rubyCode)
-			} else {
-				// Output tags are Ruby expressions
-				s.rubyContent.WriteString(rubyCode)
-				for range rubyCode {
-					s.rubyMap = append(s.rubyMap, tagStart)
-				}
-				rubyOffset += len(rubyCode)
-			}
-
-			s.regions = append(s.regions, ERBRegion{
-				Kind:      "ruby",
-				StartByte: tagStart,
-				EndByte:   i,
-			})
-			_ = regionStart
-		} else {
-			// Host language (HTML)
-			hostStart := i
-			for i < len(s.source) && !(i+1 < len(s.source) && s.source[i] == '<' && s.source[i+1] == '%') {
-				s.hostContent.WriteByte(s.source[i])
-				i++
-			}
-			if i > hostStart {
-				s.regions = append(s.regions, ERBRegion{
-					Kind:      "host",
-					StartByte: hostStart,
-					EndByte:   i,
-				})
-			}
+	// Keep every byte offset and newline stable. Only Ruby tag contents are
+	// copied; host text, ERB comments and escaped tags become whitespace.
+	ruby := []byte(s.source)
+	for i, ch := range ruby {
+		if ch != '\n' && ch != '\r' {
+			ruby[i] = ' '
 		}
 	}
+	hostStart := 0
+	for i := 0; i < len(s.source); {
+		if !strings.HasPrefix(s.source[i:], "<%") {
+			i++
+			continue
+		}
+		if strings.HasPrefix(s.source[i:], "<%%") {
+			i += 3
+			continue
+		}
+		tagStart := i
+		codeStart := i + 2
+		comment := false
+		if codeStart < len(s.source) {
+			switch s.source[codeStart] {
+			case '#':
+				comment = true
+				codeStart++
+			case '=', '-':
+				codeStart++
+			}
+		}
+		closeOffset := strings.Index(s.source[codeStart:], "%>")
+		if closeOffset < 0 {
+			line, col := sourcePosition(s.source, tagStart)
+			s.err = &IncompleteLiteralError{Kind: "ERB tag", Line: line, Column: col}
+			break
+		}
+		codeEnd := codeStart + closeOffset
+		i = codeEnd + 2
+		if codeEnd > codeStart && s.source[codeEnd-1] == '-' {
+			codeEnd--
+		}
+		if comment {
+			continue
+		}
+		if tagStart > hostStart {
+			s.addRegion("host", hostStart, tagStart)
+			s.hostContent.WriteString(s.source[hostStart:tagStart])
+		}
+		s.addRegion("ruby", tagStart, i)
+		copy(ruby[codeStart:codeEnd], s.source[codeStart:codeEnd])
+		// Adjacent tags are separate statements, not one concatenated identifier.
+		ruby[i-1] = ';'
+		hostStart = i
+	}
+	if hostStart < len(s.source) {
+		s.addRegion("host", hostStart, len(s.source))
+		s.hostContent.WriteString(s.source[hostStart:])
+	}
+	s.rubyContent.Write(ruby)
 }
 
-// RubyContent returns concatenated Ruby code from ERB tags.
+func (s *ERBScanner) addRegion(kind string, start, end int) {
+	startLine, startCol := sourcePosition(s.source, start)
+	endLine, endCol := sourcePosition(s.source, end)
+	s.regions = append(s.regions, ERBRegion{Kind: kind, StartByte: start, EndByte: end, StartLine: startLine, StartCol: startCol, EndLine: endLine, EndCol: endCol})
+}
+
+// Err reports malformed template delimiters. Callers must not publish a partial
+// Ruby AST when extraction fails.
+func (s *ERBScanner) Err() error { return s.err }
+
+// RubyContent returns Ruby code padded to the template's original byte positions.
 func (s *ERBScanner) RubyContent() string {
 	return s.rubyContent.String()
 }
@@ -126,11 +136,6 @@ func (s *ERBScanner) InsideHostLanguageAtLineCol(line, col int) bool {
 
 // MapRubyToERB maps a position in ruby content back to ERB source position.
 func (s *ERBScanner) MapRubyToERB(rubyLine, rubyCol int) (line, col int) {
-	rubyOffset := lineColToOffset(s.rubyContent.String(), rubyLine, rubyCol)
-	if rubyOffset < len(s.rubyMap) {
-		erbOffset := s.rubyMap[rubyOffset]
-		return offsetToLineCol(s.source, erbOffset)
-	}
 	return rubyLine, rubyCol
 }
 

@@ -143,10 +143,25 @@ func (s *Server) processMessage(msg Message) {
 		s.SendResponse(msg.ID, handlers.TypeHierarchySupertypes(ctx, msg.Params))
 	case "workspace/symbol":
 		s.SendResponse(msg.ID, handlers.WorkspaceSymbol(ctx, msg.Params))
+	case "workspace/executeCommand":
+		result, err := s.ExecuteCommand(msg.Params)
+		if err != nil {
+			s.SendError(msg.ID, err.Code, err.Message)
+		} else {
+			s.SendResponse(msg.ID, result)
+		}
 	case "rubyLspGo/reindexWorkspace":
-		s.SendResponse(msg.ID, s.ReindexWorkspace())
+		result, err := s.ExecuteCommand(map[string]interface{}{"command": "rubyLspGo.reindexWorkspace"})
+		if err != nil {
+			s.SendError(msg.ID, err.Code, err.Message)
+		} else {
+			s.SendResponse(msg.ID, result)
+		}
 	default:
 		s.Logger.Printf("Unhandled method: %s", msg.Method)
+		if msg.ID != nil {
+			s.SendError(msg.ID, -32601, "Method not found: "+msg.Method)
+		}
 	}
 }
 
@@ -182,7 +197,7 @@ func (s *Server) HandleInitialize(params interface{}) interface{} {
 		"capabilities": buildCapabilities(),
 		"serverInfo": map[string]string{
 			"name":    "Ruby LSP Go",
-			"version": "1.3.0",
+			"version": "1.3.3",
 		},
 	}
 }
@@ -365,6 +380,31 @@ func (s *Server) ReindexWorkspace() interface{} {
 	return map[string]interface{}{"started": true}
 }
 
+type CommandError struct {
+	Code    int
+	Message string
+}
+
+// ExecuteCommand implements the advertised LSP command, rather than relying on
+// a private request that the language client does not use for advertised commands.
+func (s *Server) ExecuteCommand(params interface{}) (interface{}, *CommandError) {
+	arguments, ok := params.(map[string]interface{})
+	if !ok {
+		return nil, &CommandError{-32602, "executeCommand requires a command string"}
+	}
+	command, ok := arguments["command"].(string)
+	if !ok || command == "" {
+		return nil, &CommandError{-32602, "executeCommand requires a command string"}
+	}
+	if command != "rubyLspGo.reindexWorkspace" {
+		return nil, &CommandError{-32602, "Unknown command: " + command}
+	}
+	if s.Index == nil {
+		return nil, &CommandError{-32002, "Workspace index is not initialized"}
+	}
+	return s.ReindexWorkspace(), nil
+}
+
 func (s *Server) isInWorkspace(filePath string) bool {
 	if s.State == nil || s.State.WorkspacePath == "" {
 		return true
@@ -418,6 +458,16 @@ func (s *Server) SendResponse(id interface{}, result interface{}) {
 		return
 	}
 
+	fmt.Printf("Content-Length: %d\r\n\r\n%s", len(jsonBytes), jsonBytes)
+}
+
+func (s *Server) SendError(id interface{}, code int, message string) {
+	response := map[string]interface{}{"jsonrpc": "2.0", "id": id, "error": map[string]interface{}{"code": code, "message": message}}
+	jsonBytes, err := json.Marshal(response)
+	if err != nil {
+		s.Logger.Printf("Error marshaling error response: %v", err)
+		return
+	}
 	fmt.Printf("Content-Length: %d\r\n\r\n%s", len(jsonBytes), jsonBytes)
 }
 

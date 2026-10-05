@@ -44,3 +44,14 @@ func TestBaseDocumentDiscardsFailedAST(t *testing.T) {
 		t.Fatal("failed parse retained AST")
 	}
 }
+
+func TestERBDetectedFromURIAndIncompleteTagDiscardsAST(t *testing.T) {
+	doc := NewDocument("file:///example.init.erb", "echo \"can't start <%= @home %>/bin\"\n<% class Real; end %>", 1, "shellscript")
+	if _, ok := doc.(*ERBDocument); !ok || doc.ParseResult() == nil {
+		t.Fatalf("template was treated as plain source: %T", doc)
+	}
+	doc.ApplyEdits([]TextEdit{{NewText: "<% class Incomplete"}})
+	if doc.ParseResult() != nil {
+		t.Fatal("incomplete ERB tag published a partial AST")
+	}
+}

@@ -135,16 +135,16 @@ func TestLSPSubprocess(t *testing.T) {
 		}
 	}
 	id := 0
-	request := func(method string, params interface{}) interface{} {
+	requestResponse := func(method string, params interface{}) map[string]interface{} {
 		t.Helper()
 		id++
 		send(id, method, params)
 		select {
 		case response := <-responses:
-			if response["id"] != float64(id) || response["error"] != nil {
+			if response["id"] != float64(id) {
 				t.Fatalf("unexpected response: %v", response)
 			}
-			return response["result"]
+			return response
 		case err := <-readErrors:
 			t.Fatalf("server response failed: %v; logs: %v", err, logs)
 		case <-ctx.Done():
@@ -152,6 +152,26 @@ func TestLSPSubprocess(t *testing.T) {
 		}
 		return nil
 	}
+	request := func(method string, params interface{}) interface{} {
+		t.Helper()
+		response := requestResponse(method, params)
+		if response["error"] != nil {
+			t.Fatalf("unexpected error response: %v", response)
+		}
+		return response["result"]
+	}
+	assertRequestError := func(method string, params interface{}, code int) {
+		t.Helper()
+		response := requestResponse(method, params)
+		failure, ok := response["error"].(map[string]interface{})
+		if !ok || failure["code"] != float64(code) {
+			t.Fatalf("wrong JSON-RPC error: %v", response)
+		}
+		if _, hasResult := response["result"]; hasResult {
+			t.Fatalf("error also returned a result: %v", response)
+		}
+	}
+	assertRequestError("workspace/executeCommand", map[string]interface{}{"command": "rubyLspGo.reindexWorkspace"}, -32002)
 	dir := t.TempDir()
 	bad := filepath.Join(dir, "a_bad.rb")
 	good := filepath.Join(dir, "z_good.rb")
@@ -164,7 +184,20 @@ func TestLSPSubprocess(t *testing.T) {
 	uri := func(path string) string { return (&url.URL{Scheme: "file", Path: filepath.ToSlash(path)}).String() }
 	write(bad, "class Unpublished\nend\n\"unfinished")
 	write(good, "class Survives\nend\n")
-	request("initialize", map[string]interface{}{"rootUri": uri(dir)})
+	initialize := request("initialize", map[string]interface{}{"rootUri": uri(dir)}).(map[string]interface{})
+	manifestBytes, err := os.ReadFile("vscode-extension/package.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(manifestBytes, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if initialize["serverInfo"].(map[string]interface{})["version"] != manifest.Version {
+		t.Fatalf("server and extension versions differ: %v", initialize["serverInfo"])
+	}
 	send(0, "initialized", map[string]interface{}{})
 	waitLog("Failed to index "+bad, 1)
 	waitLog("AST indexing complete", 1)
@@ -216,6 +249,20 @@ func TestLSPSubprocess(t *testing.T) {
 	assertSymbol("Survives", 0)
 	assertSymbol("Rebuilt", 1)
 
+	// Exercise the standard request actually sent by LanguageClient for the
+	// command advertised in initialize, not just the backwards-compatible alias.
+	write(good, "class RebuiltViaCommand\nend\n")
+	result = request("workspace/executeCommand", map[string]interface{}{"command": "rubyLspGo.reindexWorkspace"})
+	if result.(map[string]interface{})["started"] != true {
+		t.Fatalf("standard reindex not started: %v", result)
+	}
+	waitLog("AST indexing complete", 3)
+	assertSymbol("Rebuilt", 0)
+	assertSymbol("RebuiltViaCommand", 1)
+	assertRequestError("workspace/executeCommand", map[string]interface{}{"command": "unknown"}, -32602)
+	assertRequestError("workspace/executeCommand", nil, -32602)
+	assertRequestError("unknown/request", nil, -32601)
+
 	// Opening and diagnosing the same broken source must also leave the
 	// process responsive, without returning an AST from a previous version.
 	send(0, "textDocument/didOpen", map[string]interface{}{"textDocument": map[string]interface{}{
@@ -225,7 +272,7 @@ func TestLSPSubprocess(t *testing.T) {
 	if len(result.(map[string]interface{})["items"].([]interface{})) != 1 {
 		t.Fatalf("missing diagnostic: %v", result)
 	}
-	assertSymbol("Rebuilt", 1)
+	assertSymbol("RebuiltViaCommand", 1)
 	request("shutdown", nil)
 	send(0, "exit", nil)
 	_ = in.Close()

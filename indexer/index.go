@@ -392,8 +392,11 @@ func (idx *IndexStore) parseFileOnly(filePath, source string) (entries []Entry, 
 		source = string(data)
 	}
 
-	if strings.HasSuffix(filePath, ".erb") {
+	if strings.EqualFold(filepath.Ext(filePath), ".erb") {
 		scanner := parser.NewERBScanner(source)
+		if err := scanner.Err(); err != nil {
+			return nil, err
+		}
 		source = scanner.RubyContent()
 	}
 

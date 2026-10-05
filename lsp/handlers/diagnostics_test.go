@@ -18,6 +18,23 @@ func TestSyntaxDiagnosticsIncompleteLiterals(t *testing.T) {
 	}
 }
 
+func TestSyntaxDiagnosticsUseSharedLiteralLexer(t *testing.T) {
+	for _, source := range []string{
+		"value = <<~TEXT\nIt's read/write } (\nTEXT\n",
+		"=begin\nIt's read/write } (\n=end\n",
+		`chars = [?}, ?), ?']`, `value = %q{(}`, `pattern = /\)/`,
+	} {
+		if diagnostics := syntaxDiagnostics(source); len(diagnostics) != 0 {
+			t.Fatalf("false diagnostic for %q: %v", source, diagnostics)
+		}
+	}
+	diagnostics := syntaxDiagnostics("# intro\n  value = <<TEXT\nunfinished")
+	start := diagnostics[0].(map[string]interface{})["range"].(map[string]interface{})["start"].(map[string]interface{})
+	if start["line"] != 1 || start["character"] != 10 {
+		t.Fatalf("diagnostic points downstream instead of at opener: %v", start)
+	}
+}
+
 // The fixture mirrors the user's reported file:
 //   - 12 lines of leading `#` comments
 //   - one `class ... end` block
